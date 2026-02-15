@@ -1,0 +1,34 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: macos-14
+    strategy:
+      matrix:
+        build-type: [debug, release]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_15.4.app
+
+      - name: Build (${{ matrix.build-type }})
+        run: bash Scripts/build.sh ${{ matrix.build-type }}
+
+      - name: Bundle app
+        if: matrix.build-type == 'release'
+        run: bash Scripts/bundle.sh
+
+      - name: Upload app bundle
+        if: matrix.build-type == 'release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: MacStats.app
+          path: .build/release/MacStats.app

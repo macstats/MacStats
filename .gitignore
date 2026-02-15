@@ -1,0 +1,19 @@
+# Build artifacts
+.build/
+
+# Claude Code
+.claude/
+
+# Xcode
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+DerivedData/
+
+# macOS
+.DS_Store
+*.dSYM/
+
+# SwiftPM
+.swiftpm/
+Package.resolved

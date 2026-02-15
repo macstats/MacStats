@@ -1,0 +1,64 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-14
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_15.4.app
+
+      - name: Show build environment
+        run: |
+          swift --version
+          xcodebuild -version
+
+      - name: Build app bundle
+        run: bash Scripts/bundle.sh
+
+      - name: Verify app bundle
+        run: |
+          test -d .build/release/MacStats.app
+          file .build/release/MacStats.app/Contents/MacOS/MacStats
+          lipo -info .build/release/MacStats.app/Contents/MacOS/MacStats
+          codesign -vv .build/release/MacStats.app
+
+      - name: Create DMG
+        run: bash Scripts/dmg.sh
+
+      - name: Create ZIP
+        run: |
+          cd .build/release
+          ditto -c -k --keepParent MacStats.app MacStats.zip
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: MacStats ${{ steps.version.outputs.version }}
+          body: |
+            ## MacStats ${{ steps.version.outputs.version }}
+
+            ### Install
+            **DMG (recommended):** Download `MacStats.dmg`, open it, drag MacStats to Applications.
+
+            **ZIP:** Download `MacStats.zip`, unzip, drag `MacStats.app` to `/Applications`.
+
+            > Universal Binary — supports macOS 13+ (Ventura) on both Apple Silicon and Intel Macs.
+          files: |
+            .build/dmg/MacStats.dmg
+            .build/release/MacStats.zip
+          generate_release_notes: true
