@@ -1,43 +1,54 @@
 import SwiftUI
 
-struct ProcessListView: View, Equatable {
-    let processes: [TopProcess]
+/// Process browser: ranked list with filtering, row-count control and
+/// SIGTERM/SIGKILL actions. Ranking happens in `ProcessMonitor` so the UI
+/// never sorts on the main thread.
+struct ProcessListView: View {
+    @ObservedObject var viewModel: StatsViewModel
     @Binding var sort: ProcessSortKey
 
-    static func == (lhs: ProcessListView, rhs: ProcessListView) -> Bool {
-        lhs.processes == rhs.processes && lhs.sort == rhs.sort
-    }
+    @State private var query = ""
+    @State private var searchDebounce: Task<Void, Never>?
 
-    private var ranked: [TopProcess] {
-        processes.sorted { lhs, rhs in
-            switch sort {
-            case .cpu:
-                return lhs.cpuPercent == rhs.cpuPercent
-                    ? lhs.memPercent > rhs.memPercent
-                    : lhs.cpuPercent > rhs.cpuPercent
-            case .memory:
-                return lhs.memPercent == rhs.memPercent
-                    ? lhs.cpuPercent > rhs.cpuPercent
-                    : lhs.memPercent > rhs.memPercent
-            }
-        }
-    }
+    private static let limits = [5, 10, 20]
+
+    private var processes: [TopProcess] { viewModel.processes }
 
     var body: some View {
         Panel {
             VStack(alignment: .leading, spacing: DS.Space.s) {
-                PanelHeader("Top Processes", symbol: "list.number") {
-                    Picker("Sort", selection: $sort) {
-                        ForEach(ProcessSortKey.allCases, id: \.self) { key in
-                            Text(key.label).tag(key)
+                PanelHeader("Processes", symbol: "list.number") {
+                    HStack(spacing: DS.Space.s) {
+                        Picker("Sort", selection: $sort) {
+                            ForEach(ProcessSortKey.allCases, id: \.self) { key in
+                                Text(key.label).tag(key)
+                            }
                         }
+                        .pickerStyle(.segmented)
+                        .controlSize(.mini)
+                        .labelsHidden()
+                        .frame(width: 108)
+                        .accessibilityLabel("Sort processes")
+
+                        Menu {
+                            ForEach(Self.limits, id: \.self) { value in
+                                Button("Top \(value)") {
+                                    viewModel.setProcessLimit(value)
+                                }
+                            }
+                        } label: {
+                            Text("\(viewModel.processLimit)")
+                                .font(DS.Text.mono(10, weight: .medium))
+                                .foregroundColor(DS.Palette.secondary)
+                        }
+                        .menuStyle(.borderlessButton)
+                        .menuIndicator(.hidden)
+                        .frame(width: 20)
+                        .accessibilityLabel("Rows to show")
                     }
-                    .pickerStyle(.segmented)
-                    .controlSize(.mini)
-                    .labelsHidden()
-                    .frame(width: 108)
-                    .accessibilityLabel("Sort processes")
                 }
+
+                searchField
 
                 HStack(spacing: 6) {
                     Text("PROCESS")
@@ -51,23 +62,95 @@ struct ProcessListView: View, Equatable {
                 .foregroundColor(DS.Palette.tertiary)
 
                 if processes.isEmpty {
-                    HStack(spacing: DS.Space.s) {
-                        ProgressView()
-                            .controlSize(.small)
-                        Text("Sampling…")
-                            .font(DS.Text.body)
-                            .foregroundColor(DS.Palette.secondary)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, DS.Space.s)
+                    emptyState
                 } else {
                     VStack(spacing: 1) {
-                        ForEach(Array(ranked.enumerated()), id: \.element.id) { index, process in
+                        ForEach(Array(processes.enumerated()), id: \.element.id) { index, process in
                             ProcessRow(rank: index + 1, process: process, sort: sort)
+                                .contextMenu {
+                                    Button("Quit “\(process.name)”") {
+                                        viewModel.kill(pid: process.pid, force: false)
+                                    }
+                                    Button("Force Quit “\(process.name)”") {
+                                        viewModel.kill(pid: process.pid, force: true)
+                                    }
+                                }
                         }
                     }
                 }
             }
+        }
+        .onAppear {
+            viewModel.setProcessSort(sort)
+        }
+        .onChange(of: sort) { newValue in
+            viewModel.setProcessSort(newValue)
+        }
+        .onDisappear {
+            searchDebounce?.cancel()
+        }
+    }
+
+    private var searchField: some View {
+        HStack(spacing: DS.Space.s) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundColor(DS.Palette.tertiary)
+
+            TextField("Filter by name or path", text: $query)
+                .textFieldStyle(.plain)
+                .font(DS.Text.body)
+                .onChange(of: query) { newValue in
+                    scheduleSearch(newValue)
+                }
+
+            if !query.isEmpty {
+                Button {
+                    query = ""
+                    scheduleSearch("")
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 9))
+                        .foregroundColor(DS.Palette.tertiary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear filter")
+            }
+        }
+        .padding(.horizontal, DS.Space.s)
+        .padding(.vertical, 3)
+        .background(
+            RoundedRectangle(cornerRadius: DS.Radius.s, style: .continuous)
+                .fill(DS.Palette.inset)
+        )
+    }
+
+    @ViewBuilder
+    private var emptyState: some View {
+        HStack(spacing: DS.Space.s) {
+            if query.isEmpty {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Sampling…")
+                    .font(DS.Text.body)
+                    .foregroundColor(DS.Palette.secondary)
+            } else {
+                Text("No processes match “\(query)”")
+                    .font(DS.Text.body)
+                    .foregroundColor(DS.Palette.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, DS.Space.s)
+    }
+
+    /// Typing should not run a full `proc_pidinfo` sweep on every keystroke.
+    private func scheduleSearch(_ text: String) {
+        searchDebounce?.cancel()
+        searchDebounce = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard !Task.isCancelled else { return }
+            viewModel.setProcessSearch(text)
         }
     }
 }

@@ -242,6 +242,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
         menu.addItem(menuItem("Open Activity Monitor", symbol: "gauge.with.dots.needle.33percent", action: #selector(openActivityMonitor)))
         menu.addItem(menuItem("Copy Stats Summary", symbol: "doc.on.clipboard", action: #selector(copyStatsSummary)))
+        menu.addItem(menuItem("Export Metrics CSV…", symbol: "square.and.arrow.down", action: #selector(exportMetricsCSV)))
         menu.addItem(.separator())
 
         let quickActions = NSMenu()
@@ -251,6 +252,15 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         let quickActionsItem = menuItem("Quick Actions", symbol: "bolt.fill", action: nil)
         quickActionsItem.submenu = quickActions
         menu.addItem(quickActionsItem)
+
+        let alerts = NSMenu()
+        let alertsToggle = menuItem("Enable Alerts", action: #selector(toggleAlerts(_:)))
+        alertsToggle.state = viewModel.alertsEnabled ? .on : .off
+        alerts.addItem(alertsToggle)
+        alerts.addItem(menuItem("Send Test Notification", symbol: "bell.badge", action: #selector(sendTestNotification)))
+        let alertsItem = menuItem("Alerts", symbol: "bell", action: nil)
+        alertsItem.submenu = alerts
+        menu.addItem(alertsItem)
 
         menu.addItem(.separator())
 
@@ -327,6 +337,22 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     @objc private func openActivityMonitor() { AppActions.openActivityMonitor() }
 
     @objc private func copyStatsSummary() { AppActions.copySummary(viewModel.latestStats) }
+
+    @objc private func exportMetricsCSV() {
+        AppActions.saveCSV(
+            viewModel.csvSnapshot(),
+            suggestedName: MetricsExporter.suggestedFileName()
+        )
+    }
+
+    @objc private func toggleAlerts(_ sender: NSMenuItem) {
+        viewModel.setAlertsEnabled(!viewModel.alertsEnabled)
+        sender.state = viewModel.alertsEnabled ? .on : .off
+    }
+
+    @objc private func sendTestNotification() {
+        viewModel.sendTestNotification()
+    }
 
     @objc private func sleepDisplay() { AppActions.sleepDisplay() }
 

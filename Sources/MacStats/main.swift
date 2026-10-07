@@ -16,6 +16,13 @@ if let flagIndex = CommandLine.arguments.firstIndex(of: "--snapshot") {
     exit(0)
 }
 
+// Headless diagnostics: `MacStats --dump-once` prints one real sample and
+// exits, so monitors can be verified without a GUI session.
+if CommandLine.arguments.contains("--dump-once") {
+    DumpOnce.run()
+    exit(0)
+}
+
 let app = NSApplication.shared
 // Deliberate product choice: MacStats lives in the menu bar only, with no
 // Dock icon and no main window.

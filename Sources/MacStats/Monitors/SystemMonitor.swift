@@ -23,18 +23,30 @@ final class SystemMonitor {
     private let processMonitor = ProcessMonitor()
     private let batteryMonitor = BatteryMonitor()
     private let wifiMonitor = WiFiMonitor()
+    private let gpuMonitor = GPUMonitor()
+    private let sensorMonitor = SensorMonitor()
+    private let connectionMonitor = ConnectionMonitor()
 
     private var cachedDisk = DiskStats()
     private var cachedBattery = BatteryStats()
     private var cachedWifi = WiFiStats()
+    private var cachedGPU = GPUStats()
+    private var cachedSensors = SensorStats()
+    private var cachedConnections = ConnectionStats()
 
     // Time-based schedules (seconds since boot).
     private var nextDiskRead: TimeInterval = 0
     private var nextBatteryRead: TimeInterval = 0
     private var nextWiFiRead: TimeInterval = 0
+    private var nextGPURead: TimeInterval = 0
+    private var nextSensorRead: TimeInterval = 0
+    private var nextConnectionRead: TimeInterval = 0
     private var diskInterval: TimeInterval = 0
     private var batteryInterval: TimeInterval = 0
     private var wifiInterval: TimeInterval = 0
+    private var gpuInterval: TimeInterval = 0
+    private var sensorInterval: TimeInterval = 0
+    private var connectionInterval: TimeInterval = 0
 
     /// Forces the next refresh to re-read every slow component, e.g. after
     /// wake, network changes, or when the popover opens.
@@ -42,9 +54,15 @@ final class SystemMonitor {
         nextDiskRead = 0
         nextBatteryRead = 0
         nextWiFiRead = 0
+        nextGPURead = 0
+        nextSensorRead = 0
+        nextConnectionRead = 0
         diskInterval = 0
         batteryInterval = 0
         wifiInterval = 0
+        gpuInterval = 0
+        sensorInterval = 0
+        connectionInterval = 0
         wifiMonitor.invalidate()
     }
 
@@ -95,6 +113,51 @@ final class SystemMonitor {
             nextWiFiRead = now + wifiInterval
         }
 
+        // GPU utilization moves quickly; keep a short clock so the trace stays
+        // honest, but still back off while nothing changes.
+        if now >= nextGPURead {
+            let fresh = gpuMonitor.read()
+            let changed = fresh != cachedGPU
+            cachedGPU = fresh
+            gpuInterval = Self.nextInterval(
+                current: gpuInterval,
+                base: interactive ? 3 : 6,
+                maximum: interactive ? 15 : 60,
+                changed: changed
+            )
+            nextGPURead = now + gpuInterval
+        }
+
+        // SMC reads are the most expensive monitor; they only matter for the
+        // thermal card, so they run on a slow clock.
+        if now >= nextSensorRead {
+            let fresh = sensorMonitor.read()
+            let changed = fresh != cachedSensors
+            cachedSensors = fresh
+            sensorInterval = Self.nextInterval(
+                current: sensorInterval,
+                base: interactive ? 15 : 45,
+                maximum: interactive ? 60 : 180,
+                changed: changed
+            )
+            nextSensorRead = now + sensorInterval
+        }
+
+        // The TCP table comes from spawning `netstat`; it is by far the most
+        // expensive slow monitor, so it runs on the longest clock.
+        if now >= nextConnectionRead {
+            let fresh = connectionMonitor.read()
+            let changed = fresh != cachedConnections
+            cachedConnections = fresh
+            connectionInterval = Self.nextInterval(
+                current: connectionInterval,
+                base: interactive ? 30 : 90,
+                maximum: interactive ? 120 : 300,
+                changed: changed
+            )
+            nextConnectionRead = now + connectionInterval
+        }
+
         let thermal: ThermalLevel
         switch ProcessInfo.processInfo.thermalState {
         case .nominal:  thermal = .nominal
@@ -111,12 +174,25 @@ final class SystemMonitor {
             disk: cachedDisk,
             battery: cachedBattery,
             wifi: cachedWifi,
+            gpu: cachedGPU,
+            sensors: cachedSensors,
+            connections: cachedConnections,
             thermalLevel: thermal
         )
     }
 
-    func topProcesses(_ count: Int = 5) -> [TopProcess] {
-        processMonitor.top(count)
+    func topProcesses(
+        _ count: Int = 5,
+        sort: ProcessSortKey = .cpu,
+        query: String = ""
+    ) -> [TopProcess] {
+        processMonitor.top(count, sort: sort, query: query)
+    }
+
+    /// Sends SIGTERM (`force == false`) or SIGKILL (`force == true`).
+    @discardableResult
+    func killProcess(pid: Int32, force: Bool = false) -> Bool {
+        processMonitor.kill(pid: pid, force: force)
     }
 
     /// Diagnostic hook used by `MacStats --benchmark`: times each monitor in
@@ -144,6 +220,9 @@ final class SystemMonitor {
             ("disk", { _ = self.diskMonitor.read() }),
             ("battery", { _ = self.batteryMonitor.read() }),
             ("wifi", { _ = self.wifiMonitor.read() }),
+            ("gpu", { _ = self.gpuMonitor.read() }),
+            ("sensors", { _ = self.sensorMonitor.read() }),
+            ("connections", { _ = self.connectionMonitor.read() }),
             ("processes", { _ = self.processMonitor.top(5) }),
         ]
 

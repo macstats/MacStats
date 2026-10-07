@@ -5,6 +5,8 @@ struct TopProcess: Equatable, Identifiable {
     let name: String
     let cpuPercent: Double
     let memPercent: Double
+    var residentBytes: UInt64 = 0
+    var executablePath: String = ""
 
     var id: Int32 { pid }
 }

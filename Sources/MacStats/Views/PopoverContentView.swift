@@ -23,6 +23,11 @@ struct PopoverContentView: View {
                     )
                     .equatable()
 
+                    if !viewModel.activeAlerts.isEmpty {
+                        AlertBannerView(alerts: viewModel.activeAlerts)
+                            .equatable()
+                    }
+
                     OverviewPanel(
                         cpu: viewModel.cpu,
                         memory: viewModel.memory,
@@ -35,13 +40,19 @@ struct PopoverContentView: View {
                     CPUDetailView(stats: viewModel.cpu, trace: viewModel.cpuTrace)
                         .equatable()
 
+                    if viewModel.gpu.isAvailable {
+                        GPUDetailView(stats: viewModel.gpu, history: viewModel.gpuTrace)
+                            .equatable()
+                    }
+
                     MemoryDetailView(stats: viewModel.memory)
                         .equatable()
 
                     NetworkDetailView(
                         stats: viewModel.network,
                         uploadTrace: viewModel.uploadTrace,
-                        downloadTrace: viewModel.downloadTrace
+                        downloadTrace: viewModel.downloadTrace,
+                        connections: viewModel.connections
                     )
                     .equatable()
 
@@ -50,16 +61,24 @@ struct PopoverContentView: View {
                             .equatable()
                     }
 
-                    DiskDetailView(stats: viewModel.disk)
+                    DiskDetailView(
+                        stats: viewModel.disk,
+                        readTrace: viewModel.diskReadTrace,
+                        writeTrace: viewModel.diskWriteTrace
+                    )
                         .equatable()
+
+                    if viewModel.sensors.isAvailable {
+                        SensorDetailView(stats: viewModel.sensors)
+                            .equatable()
+                    }
 
                     if viewModel.battery.isPresent {
                         BatteryDetailView(stats: viewModel.battery)
                             .equatable()
                     }
 
-                    ProcessListView(processes: viewModel.processes, sort: $settings.processSort)
-                        .equatable()
+                    ProcessListView(viewModel: viewModel, sort: $settings.processSort)
                 }
                 .padding(DS.Space.m)
             }
@@ -70,7 +89,7 @@ struct PopoverContentView: View {
 
             footer
         }
-        .frame(width: DS.Layout.popoverWidth, height: 600)
+        .frame(width: DS.Layout.popoverWidth, height: 620)
     }
 
     private var footer: some View {
@@ -108,6 +127,20 @@ struct PopoverContentView: View {
         Button("Copy Stats Summary") {
             AppActions.copySummary(viewModel.latestStats)
         }
+        Button("Export Metrics CSV…") {
+            AppActions.saveCSV(
+                viewModel.csvSnapshot(),
+                suggestedName: MetricsExporter.suggestedFileName()
+            )
+        }
+
+        Toggle(
+            "Enable Alerts",
+            isOn: Binding(
+                get: { viewModel.alertsEnabled },
+                set: { viewModel.setAlertsEnabled($0) }
+            )
+        )
 
         Divider()
 

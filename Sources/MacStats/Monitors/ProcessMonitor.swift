@@ -16,7 +16,9 @@ final class ProcessMonitor {
     private let totalMemory = Double(ProcessInfo.processInfo.physicalMemory)
     private let coreCount = Double(ProcessInfo.processInfo.activeProcessorCount)
 
-    func top(_ count: Int = 5) -> [TopProcess] {
+    /// Ranks processes by CPU or resident memory, optionally filtered by a
+    /// case-insensitive substring match on the name or executable path.
+    func top(_ count: Int = 5, sort: ProcessSortKey = .cpu, query: String = "") -> [TopProcess] {
         var bufferSize = proc_listpids(UInt32(PROC_ALL_PIDS), 0, nil, 0)
         guard bufferSize > 0 else { return [] }
 
@@ -33,6 +35,8 @@ final class ProcessMonitor {
 
         let now = ProcessInfo.processInfo.systemUptime
         let dt = previousTimestamp > 0 ? now - previousTimestamp : 0
+        let needle = query.trimmingCharacters(in: .whitespaces).lowercased()
+        let isSearching = !needle.isEmpty
 
         currentCPUTimes.removeAll(keepingCapacity: true)
         currentCPUTimes.reserveCapacity(pidCount)
@@ -63,19 +67,45 @@ final class ProcessMonitor {
 
             let memPercent = Double(taskInfo.pti_resident_size) / totalMemory * 100.0
 
-            // Cheap rejects happen before any name resolution.
-            guard cpuPercent > 0.05 || memPercent > 0.2 else { continue }
+            // Cheap rejects happen before any name resolution. Searching and
+            // memory ranking need the quiet processes too.
+            if !isSearching && sort == .cpu {
+                guard cpuPercent > 0.05 || memPercent > 0.2 else { continue }
+            }
 
             var nameBuffer = [CChar](repeating: 0, count: 128)
             let nameLength = proc_name(pid, &nameBuffer, UInt32(nameBuffer.count))
-            guard nameLength > 0 else { continue }
+
+            var executablePath = ""
+            if isSearching {
+                var pathBuffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+                if proc_pidpath(pid, &pathBuffer, UInt32(pathBuffer.count)) > 0 {
+                    executablePath = String(cString: pathBuffer)
+                }
+            }
+
+            let name: String
+            if nameLength > 0 {
+                name = String(cString: nameBuffer)
+            } else if !executablePath.isEmpty {
+                name = (executablePath as NSString).lastPathComponent
+            } else {
+                continue
+            }
+
+            if isSearching {
+                let haystack = (name + " " + executablePath).lowercased()
+                guard haystack.contains(needle) else { continue }
+            }
 
             candidates.append(
                 TopProcess(
                     pid: pid,
-                    name: String(cString: nameBuffer),
+                    name: name,
                     cpuPercent: cpuPercent,
-                    memPercent: memPercent
+                    memPercent: memPercent,
+                    residentBytes: taskInfo.pti_resident_size,
+                    executablePath: executablePath
                 )
             )
         }
@@ -83,10 +113,24 @@ final class ProcessMonitor {
         swap(&previousCPUTimes, &currentCPUTimes)
         previousTimestamp = now
 
-        candidates.sort { lhs, rhs in
-            lhs.cpuPercent == rhs.cpuPercent ? lhs.memPercent > rhs.memPercent : lhs.cpuPercent > rhs.cpuPercent
+        switch sort {
+        case .cpu:
+            candidates.sort { lhs, rhs in
+                lhs.cpuPercent == rhs.cpuPercent ? lhs.memPercent > rhs.memPercent : lhs.cpuPercent > rhs.cpuPercent
+            }
+        case .memory:
+            candidates.sort { lhs, rhs in
+                lhs.residentBytes == rhs.residentBytes ? lhs.memPercent > rhs.memPercent : lhs.residentBytes > rhs.residentBytes
+            }
         }
 
         return Array(candidates.prefix(count))
+    }
+
+    /// Sends SIGTERM (`force == false`) or SIGKILL (`force == true`).
+    /// Refuses pid <= 1 and the current process.
+    func kill(pid: Int32, force: Bool = false) -> Bool {
+        guard pid > 1, pid != getpid() else { return false }
+        return Darwin.kill(pid, force ? SIGKILL : SIGTERM) == 0
     }
 }

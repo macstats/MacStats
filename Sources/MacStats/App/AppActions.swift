@@ -12,6 +12,23 @@ enum AppActions {
         NSWorkspace.shared.open(url)
     }
 
+    /// Presents a save panel and writes `csv` to the chosen location.
+    static func saveCSV(_ csv: String, suggestedName: String) {
+        let panel = NSSavePanel()
+        panel.title = "Export MacStats session metrics"
+        panel.nameFieldStringValue = suggestedName
+        panel.canCreateDirectories = true
+
+        NSApp.activate(ignoringOtherApps: true)
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        do {
+            try csv.write(to: url, atomically: true, encoding: .utf8)
+        } catch {
+            NSSound.beep()
+        }
+    }
+
     static func copySummary(_ stats: SystemStats) {
         var lines: [String] = ["MacStats Summary"]
         lines.append("CPU: \(Format.percent(stats.cpu.totalUsage, decimals: 1)) (\(stats.cpu.coreCount) cores)")
@@ -26,6 +43,35 @@ enum AppActions {
             "Disk: \(Format.percent(stats.disk.usagePercent, decimals: 1)) "
                 + "(\(Format.bytes(stats.disk.usedBytes)) / \(Format.bytes(stats.disk.totalBytes)))"
         )
+        lines.append(
+            "Disk I/O: read \(Format.speed(stats.disk.readBytesPerSec)) write \(Format.speed(stats.disk.writeBytesPerSec))"
+        )
+        if stats.gpu.isAvailable {
+            var gpu = "GPU: \(Format.percent(stats.gpu.utilizationPercent, decimals: 1))"
+            if !stats.gpu.name.isEmpty { gpu += " (\(stats.gpu.name))" }
+            if stats.gpu.memoryTotalBytes > 0 {
+                gpu += " mem \(Format.bytes(stats.gpu.memoryUsedBytes)) / \(Format.bytes(stats.gpu.memoryTotalBytes))"
+            }
+            lines.append(gpu)
+        }
+        if stats.sensors.isAvailable {
+            var sensors: [String] = []
+            if let temperature = stats.sensors.cpuTemperature {
+                sensors.append(String(format: "CPU %.1f°C", temperature))
+            }
+            for fan in stats.sensors.fans {
+                sensors.append("Fan \(fan.index) \(fan.rpm) RPM")
+            }
+            if !sensors.isEmpty {
+                lines.append("Thermals: " + sensors.joined(separator: "  "))
+            }
+        }
+        if stats.connections.isAvailable {
+            lines.append(
+                "TCP: \(stats.connections.established) established, "
+                    + "\(stats.connections.listening) listening, \(stats.connections.total) total"
+            )
+        }
         if stats.battery.isPresent {
             var battery = "Battery: \(Format.percent(stats.battery.chargePercent))"
             if stats.battery.isCharging { battery += " (Charging)" }

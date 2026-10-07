@@ -4,6 +4,7 @@ struct NetworkDetailView: View, Equatable {
     let stats: NetworkStats
     let uploadTrace: [Double]
     let downloadTrace: [Double]
+    var connections: ConnectionStats = ConnectionStats()
 
     /// Both directions share one scale so the two traces stay comparable —
     /// independently auto-scaled charts made a quiet line look busy.
@@ -39,7 +40,45 @@ struct NetworkDetailView: View, Equatable {
                     trace: uploadTrace,
                     scale: scale
                 )
+
+                if connections.isAvailable {
+                    ConnectionChips(connections: connections)
+                }
             }
+        }
+    }
+}
+
+/// TCP state counts from `ConnectionMonitor`.
+private struct ConnectionChips: View {
+    let connections: ConnectionStats
+
+    var body: some View {
+        HStack(spacing: DS.Space.m) {
+            chip(label: "Established", value: connections.established, color: DS.Palette.ok)
+            chip(label: "Listening", value: connections.listening, color: DS.Palette.down)
+            chip(label: "Time wait", value: connections.timeWait, color: DS.Palette.warn)
+            Spacer(minLength: 0)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            "TCP connections: \(connections.established) established, "
+                + "\(connections.listening) listening, \(connections.timeWait) time wait"
+        )
+    }
+
+    private func chip(label: String, value: Int, color: Color) -> some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(color)
+                .frame(width: 5, height: 5)
+            Text("\(value)")
+                .font(DS.Text.mono(10, weight: .medium))
+                .foregroundColor(DS.Palette.primary)
+                .monospacedDigit()
+            Text(label)
+                .font(DS.Text.micro)
+                .foregroundColor(DS.Palette.tertiary)
         }
     }
 }

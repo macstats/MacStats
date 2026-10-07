@@ -31,13 +31,28 @@ final class StatsViewModel: ObservableObject {
     @Published private(set) var battery = BatteryStats()
     @Published private(set) var wifi = WiFiStats()
     @Published private(set) var thermalLevel: ThermalLevel = .nominal
+    @Published private(set) var gpu = GPUStats()
+    @Published private(set) var sensors = SensorStats()
+    @Published private(set) var connections = ConnectionStats()
 
     @Published private(set) var cpuTrace: [Double] = []
     @Published private(set) var uploadTrace: [Double] = []
     @Published private(set) var downloadTrace: [Double] = []
+    @Published private(set) var gpuTrace: [Double] = []
+    @Published private(set) var diskReadTrace: [Double] = []
+    @Published private(set) var diskWriteTrace: [Double] = []
     @Published private(set) var processes: [TopProcess] = []
+    @Published private(set) var activeAlerts: [ActiveAlert] = []
     @Published private(set) var uptime: TimeInterval = 0
     @Published private(set) var lastUpdated = Date.distantPast
+
+    /// Process browser controls, bound by the process panel.
+    @Published var processSort: ProcessSortKey = .cpu
+    @Published var processSearch: String = ""
+    @Published var processLimit: Int = 5
+
+    /// Alert master switch, mirrored into `AlertCenter` (UserDefaults-backed).
+    @Published var alertsEnabled: Bool = true
 
     // MARK: - Wiring
 
@@ -45,6 +60,7 @@ final class StatsViewModel: ObservableObject {
     var onStatusBarUpdate: ((StatusBarSample) -> Void)?
 
     let settings: AppSettings
+    let alertCenter = AlertCenter()
 
     /// Latest sample, main-thread confined (used by the Copy Summary action).
     private(set) var latestStats = SystemStats()
@@ -83,16 +99,31 @@ final class StatsViewModel: ObservableObject {
     private var cpuHistory = RingBuffer<Double>(capacity: 60)
     private var uploadHistory = RingBuffer<Double>(capacity: 60)
     private var downloadHistory = RingBuffer<Double>(capacity: 60)
+    private var gpuHistory = RingBuffer<Double>(capacity: 60)
+    private var diskReadHistory = RingBuffer<Double>(capacity: 60)
+    private var diskWriteHistory = RingBuffer<Double>(capacity: 60)
     private var baseInterval: TimeInterval
 
     private let historyLength = 60
-    private let processSampleCount = 5
+
+    /// Rolling session history rendered to CSV by `MetricsExporter`.
+    private var sessionSamples: [MetricSample] = []
+    private let maxSessionSamples = 2400   // ~2 hours at a 3s tick
+
+    // Process query state is shared between the main thread (UI) and the
+    // monitor queue; `queryLock` keeps the queue from reading main-thread
+    // `@Published` state directly.
+    private let queryLock = NSLock()
+    private var querySort: ProcessSortKey = .cpu
+    private var querySearch = ""
+    private var queryLimit = 5
 
     // MARK: - Lifecycle
 
     init(settings: AppSettings = AppSettings()) {
         self.settings = settings
         self.baseInterval = settings.refreshRate.seconds
+        self.alertsEnabled = alertCenter.isEnabled
         observeEnvironment()
     }
 
@@ -111,11 +142,18 @@ final class StatsViewModel: ObservableObject {
             guard let self else { return }
             // Prime every monitor so the first popover is fully populated.
             let stats = self.monitor.refresh(mode: .background)
-            let processes = self.monitor.topProcesses(self.processSampleCount)
+            let (sort, search, limit) = self.processQuerySnapshot()
+            let processes = self.monitor.topProcesses(limit, sort: sort, query: search)
+            let alerts = self.alertCenter.evaluate(stats)
             self.record(stats)
             DispatchQueue.main.async {
                 self.latestStats = stats
-                self.publish(stats, processes: processes, uptime: ProcessInfo.processInfo.systemUptime)
+                self.publish(
+                    stats,
+                    processes: processes,
+                    alerts: alerts,
+                    uptime: ProcessInfo.processInfo.systemUptime
+                )
                 self.emitStatusBar(stats)
             }
             self.startTimer()
@@ -188,18 +226,23 @@ final class StatsViewModel: ObservableObject {
         let processStride = interactive ? 2 : 6
         var processes: [TopProcess]?
         if forceProcessSample || tickCount % processStride == 0 {
-            processes = monitor.topProcesses(processSampleCount)
+            let (sort, search, limit) = processQuerySnapshot()
+            processes = monitor.topProcesses(limit, sort: sort, query: search)
             forceProcessSample = false
         }
         tickCount &+= 1
 
         let uptime = ProcessInfo.processInfo.systemUptime
         record(stats)
+        let alerts = alertCenter.evaluate(stats)
 
         // History snapshots are copied once here, off the main thread.
         let cpuSnapshot = cpuHistory.values
         let upSnapshot = uploadHistory.values
         let downSnapshot = downloadHistory.values
+        let gpuSnapshot = gpuHistory.values
+        let diskReadSnapshot = diskReadHistory.values
+        let diskWriteSnapshot = diskWriteHistory.values
         revision &+= 1
         let currentRevision = revision
 
@@ -210,10 +253,14 @@ final class StatsViewModel: ObservableObject {
                 self.publish(
                     stats,
                     processes: processes,
+                    alerts: alerts,
                     uptime: uptime,
                     cpuTrace: cpuSnapshot,
                     uploadTrace: upSnapshot,
                     downloadTrace: downSnapshot,
+                    gpuTrace: gpuSnapshot,
+                    diskReadTrace: diskReadSnapshot,
+                    diskWriteTrace: diskWriteSnapshot,
                     revision: currentRevision
                 )
             }
@@ -227,6 +274,102 @@ final class StatsViewModel: ObservableObject {
         cpuHistory.append(stats.cpu.totalUsage)
         uploadHistory.append(stats.network.bytesSentPerSec)
         downloadHistory.append(stats.network.bytesReceivedPerSec)
+        gpuHistory.append(stats.gpu.utilizationPercent)
+        diskReadHistory.append(stats.disk.readBytesPerSec)
+        diskWriteHistory.append(stats.disk.writeBytesPerSec)
+        appendSessionSample(stats)
+    }
+
+    private func appendSessionSample(_ stats: SystemStats) {
+        sessionSamples.append(
+            MetricSample(
+                timestamp: Date(),
+                cpuPercent: stats.cpu.totalUsage,
+                memoryPercent: stats.memory.usagePercent,
+                memoryUsedBytes: stats.memory.usedBytes,
+                networkUpBytesPerSec: stats.network.bytesSentPerSec,
+                networkDownBytesPerSec: stats.network.bytesReceivedPerSec,
+                diskReadBytesPerSec: stats.disk.readBytesPerSec,
+                diskWriteBytesPerSec: stats.disk.writeBytesPerSec,
+                gpuPercent: stats.gpu.utilizationPercent,
+                cpuTemperatureCelsius: stats.sensors.cpuTemperature,
+                batteryPercent: stats.battery.isPresent ? stats.battery.chargePercent : 0
+            )
+        )
+        if sessionSamples.count > maxSessionSamples {
+            sessionSamples.removeFirst(sessionSamples.count - maxSessionSamples)
+        }
+    }
+
+    // MARK: - Process browser
+
+    func setProcessSort(_ key: ProcessSortKey) {
+        processSort = key
+        updateQuery(sort: key)
+    }
+
+    func setProcessSearch(_ text: String) {
+        processSearch = text
+        updateQuery(search: text)
+    }
+
+    func setProcessLimit(_ limit: Int) {
+        processLimit = limit
+        updateQuery(limit: limit)
+    }
+
+    /// Sends SIGTERM (`force == false`) or SIGKILL (`force == true`); the list
+    /// refreshes on the next sample.
+    func kill(pid: Int32, force: Bool = false) {
+        workQueue.async { [weak self] in
+            guard let self, !self.suspended else { return }
+            guard self.monitor.killProcess(pid: pid, force: force) else { return }
+            self.forceProcessSample = true
+            self.tick()
+        }
+    }
+
+    private func updateQuery(sort: ProcessSortKey? = nil, search: String? = nil, limit: Int? = nil) {
+        queryLock.lock()
+        if let sort { querySort = sort }
+        if let search { querySearch = search }
+        if let limit { queryLimit = limit }
+        queryLock.unlock()
+
+        workQueue.async { [weak self] in
+            guard let self, !self.suspended else { return }
+            self.forceProcessSample = true
+            self.tick()
+        }
+    }
+
+    private func processQuerySnapshot() -> (ProcessSortKey, String, Int) {
+        queryLock.lock()
+        defer { queryLock.unlock() }
+        return (querySort, querySearch, queryLimit)
+    }
+
+    // MARK: - Alerts
+
+    func setAlertsEnabled(_ enabled: Bool) {
+        alertsEnabled = enabled
+        alertCenter.isEnabled = enabled
+        refreshSoon()
+    }
+
+    func requestNotificationAuthorization() {
+        alertCenter.requestAuthorization()
+    }
+
+    func sendTestNotification() {
+        alertCenter.postTestNotification()
+    }
+
+    // MARK: - Export
+
+    /// Renders the bounded session history as CSV (main-thread callers only).
+    func csvSnapshot() -> String {
+        workQueue.sync { MetricsExporter.makeCSV(samples: sessionSamples) }
     }
 
     private func emitStatusBar(_ stats: SystemStats) {
@@ -241,10 +384,14 @@ final class StatsViewModel: ObservableObject {
     private func publish(
         _ stats: SystemStats,
         processes: [TopProcess]?,
+        alerts: [ActiveAlert]?,
         uptime newUptime: TimeInterval,
         cpuTrace: [Double] = [],
         uploadTrace: [Double] = [],
         downloadTrace: [Double] = [],
+        gpuTrace: [Double] = [],
+        diskReadTrace: [Double] = [],
+        diskWriteTrace: [Double] = [],
         revision: UInt64 = 0
     ) {
         // Only touch the sections that changed: each `@Published` write
@@ -255,12 +402,19 @@ final class StatsViewModel: ObservableObject {
         if disk != stats.disk { disk = stats.disk }
         if battery != stats.battery { battery = stats.battery }
         if wifi != stats.wifi { wifi = stats.wifi }
+        if gpu != stats.gpu { gpu = stats.gpu }
+        if sensors != stats.sensors { sensors = stats.sensors }
+        if connections != stats.connections { connections = stats.connections }
         if thermalLevel != stats.thermalLevel { thermalLevel = stats.thermalLevel }
         if let processes, processes != self.processes { self.processes = processes }
+        if let alerts, alerts != self.activeAlerts { self.activeAlerts = alerts }
 
         if !cpuTrace.isEmpty, cpuTrace != self.cpuTrace { self.cpuTrace = cpuTrace }
         if !uploadTrace.isEmpty, uploadTrace != self.uploadTrace { self.uploadTrace = uploadTrace }
         if !downloadTrace.isEmpty, downloadTrace != self.downloadTrace { self.downloadTrace = downloadTrace }
+        if !gpuTrace.isEmpty, gpuTrace != self.gpuTrace { self.gpuTrace = gpuTrace }
+        if !diskReadTrace.isEmpty, diskReadTrace != self.diskReadTrace { self.diskReadTrace = diskReadTrace }
+        if !diskWriteTrace.isEmpty, diskWriteTrace != self.diskWriteTrace { self.diskWriteTrace = diskWriteTrace }
 
         // The header shows minutes, so it only needs minute-granular updates.
         let roundedUptime = (newUptime / 60).rounded(.down) * 60

@@ -32,6 +32,7 @@ let package = Package(
                 .linkedFramework("ServiceManagement"),
                 .linkedFramework("CoreWLAN"),
                 .linkedFramework("CoreLocation"),
+                .linkedFramework("UserNotifications"),
             ]
         ),
         // Regression cover for the pure logic the app renders. The sources are

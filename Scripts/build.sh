@@ -23,6 +23,7 @@ FRAMEWORKS=(
     -framework ServiceManagement
     -framework CoreWLAN
     -framework CoreLocation
+    -framework UserNotifications
 )
 
 COMMON_FLAGS=(

@@ -13,6 +13,8 @@ final class NetworkMonitor {
     private var previousTimestamp: TimeInterval = 0
     private var sessionSent: UInt64 = 0
     private var sessionReceived: UInt64 = 0
+    private var peakSentPerSec: Double = 0
+    private var peakReceivedPerSec: Double = 0
 
     private static let loopbackName = "lo0"
 
@@ -63,11 +65,16 @@ final class NetworkMonitor {
         previousBytesReceived = totalReceived
         previousTimestamp = now
 
+        peakSentPerSec = max(peakSentPerSec, sentPerSec)
+        peakReceivedPerSec = max(peakReceivedPerSec, receivedPerSec)
+
         return NetworkStats(
             bytesSentPerSec: sentPerSec,
             bytesReceivedPerSec: receivedPerSec,
             sessionSentBytes: sessionSent,
-            sessionReceivedBytes: sessionReceived
+            sessionReceivedBytes: sessionReceived,
+            peakSentPerSec: peakSentPerSec,
+            peakReceivedPerSec: peakReceivedPerSec
         )
     }
 }
