@@ -1,7 +1,14 @@
 import SwiftUI
 
+/// Process browser card.
+///
+/// CONTRACT (frozen by root): `ProcessListView(viewModel: StatsViewModel)`.
+/// The view is driven by `StatsViewModel` (`topProcesses`, `processSort`,
+/// `processSearch`, `processLimit`, `setProcess*`, `refreshProcesses`, `kill(pid:force:)`).
 struct ProcessListView: View {
-    let processes: [TopProcess]
+    @ObservedObject var viewModel: StatsViewModel
+
+    private var processes: [TopProcess] { viewModel.topProcesses }
 
     var body: some View {
         SectionCardView {

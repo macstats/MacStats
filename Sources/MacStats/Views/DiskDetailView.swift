@@ -2,6 +2,8 @@ import SwiftUI
 
 struct DiskDetailView: View {
     let stats: DiskStats
+    var readHistory: [Double] = []
+    var writeHistory: [Double] = []
 
     var body: some View {
         SectionCardView {
@@ -49,6 +51,25 @@ struct DiskDetailView: View {
                     Spacer()
                     DiskStat(label: "Total", value: formatBytes(stats.totalBytes))
                 }
+
+                // Baseline I/O row — the disk-I/O feature agent owns the final layout.
+                Divider()
+                HStack(spacing: 8) {
+                    DiskIOStat(
+                        label: "Read",
+                        symbol: "arrow.down.circle",
+                        color: .green,
+                        speed: stats.readBytesPerSec,
+                        history: readHistory
+                    )
+                    DiskIOStat(
+                        label: "Write",
+                        symbol: "arrow.up.circle",
+                        color: .orange,
+                        speed: stats.writeBytesPerSec,
+                        history: writeHistory
+                    )
+                }
             }
         }
     }
@@ -57,6 +78,36 @@ struct DiskDetailView: View {
         if pct > 90 { return [.red, .pink] }
         if pct > 75 { return [.orange, .yellow] }
         return [.orange, .yellow]
+    }
+}
+
+private struct DiskIOStat: View {
+    let label: String
+    let symbol: String
+    let color: Color
+    let speed: Double
+    let history: [Double]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 4) {
+                Image(systemName: symbol)
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(color)
+                Text(label)
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+                Spacer()
+                Text(diskIOSpeed(speed))
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .monospacedDigit()
+            }
+            if history.count > 1 {
+                SparklineView(data: history, maxValue: max(history.max() ?? 1, 1), color: color)
+                    .frame(height: 16)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -73,5 +124,17 @@ private struct DiskStat: View {
                 .font(.system(size: 13, weight: .medium, design: .rounded))
                 .monospacedDigit()
         }
+    }
+}
+
+private func diskIOSpeed(_ bps: Double) -> String {
+    if bps < 1024 {
+        return String(format: "%.0f B/s", bps)
+    } else if bps < 1024 * 1024 {
+        return String(format: "%.1f KB/s", bps / 1024)
+    } else if bps < 1024 * 1024 * 1024 {
+        return String(format: "%.1f MB/s", bps / (1024 * 1024))
+    } else {
+        return String(format: "%.2f GB/s", bps / (1024 * 1024 * 1024))
     }
 }

@@ -6,7 +6,9 @@ final class ProcessMonitor {
     private var previousTimestamp: Double = 0
     private let totalMemory = Double(ProcessInfo.processInfo.physicalMemory)
 
-    func top(_ count: Int = 5) -> [TopProcess] {
+    /// Baseline implementation (owned by the process-manager feature agent).
+    /// `sort`/`query`/`residentBytes`/`executablePath` are part of the frozen contract.
+    func top(_ count: Int = 5, sort: ProcessSortMode = .cpu, query: String = "") -> [TopProcess] {
         var bufferSize = proc_listpids(UInt32(PROC_ALL_PIDS), 0, nil, 0)
         guard bufferSize > 0 else { return [] }
 
@@ -17,12 +19,16 @@ final class ProcessMonitor {
         let now = ProcessInfo.processInfo.systemUptime
         let dt = previousTimestamp > 0 ? (now - previousTimestamp) : 0
         let coreCount = Double(ProcessInfo.processInfo.activeProcessorCount)
+        let needle = query.trimmingCharacters(in: .whitespaces).lowercased()
+        let isSearching = !needle.isEmpty
 
         struct ProcEntry {
             var pid: pid_t
             var name: String
             var cpuPercent: Double
             var memPercent: Double
+            var residentBytes: UInt64
+            var executablePath: String
         }
 
         var currentCPUTimes: [pid_t: Double] = [:]
@@ -52,28 +58,71 @@ final class ProcessMonitor {
 
             let memPercent = Double(taskInfo.pti_resident_size) / totalMemory * 100.0
 
-            // Skip idle processes early
-            guard cpuPercent > 0.01 || memPercent > 0.1 else { continue }
+            // Skip idle processes early unless the user is searching or sorting by memory
+            if !isSearching && sort == .cpu {
+                guard cpuPercent > 0.01 || memPercent > 0.1 else { continue }
+            }
 
             var nameBuffer = [CChar](repeating: 0, count: 256)
             let nameLen = proc_name(pid, &nameBuffer, UInt32(nameBuffer.count))
+            var executablePath = ""
+            if isSearching {
+                var pathBuffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+                if proc_pidpath(pid, &pathBuffer, UInt32(pathBuffer.count)) > 0 {
+                    executablePath = String(cString: pathBuffer)
+                }
+            }
+
             let name: String
             if nameLen > 0 {
                 name = String(cString: nameBuffer)
+            } else if !executablePath.isEmpty {
+                name = (executablePath as NSString).lastPathComponent
             } else {
                 continue
             }
 
-            entries.append(ProcEntry(pid: pid, name: name, cpuPercent: cpuPercent, memPercent: memPercent))
+            if isSearching {
+                let haystack = (name + " " + executablePath).lowercased()
+                guard haystack.contains(needle) else { continue }
+            }
+
+            entries.append(ProcEntry(
+                pid: pid,
+                name: name,
+                cpuPercent: cpuPercent,
+                memPercent: memPercent,
+                residentBytes: taskInfo.pti_resident_size,
+                executablePath: executablePath
+            ))
         }
 
         previousCPUTimes = currentCPUTimes
         previousTimestamp = now
 
-        entries.sort { $0.cpuPercent > $1.cpuPercent }
+        switch sort {
+        case .cpu:
+            entries.sort { $0.cpuPercent > $1.cpuPercent }
+        case .memory:
+            entries.sort { $0.residentBytes > $1.residentBytes }
+        }
 
         return entries.prefix(count).map {
-            TopProcess(pid: $0.pid, name: $0.name, cpuPercent: $0.cpuPercent, memPercent: $0.memPercent)
+            TopProcess(
+                pid: $0.pid,
+                name: $0.name,
+                cpuPercent: $0.cpuPercent,
+                memPercent: $0.memPercent,
+                residentBytes: $0.residentBytes,
+                executablePath: $0.executablePath
+            )
         }
+    }
+
+    /// Sends SIGTERM (`force == false`) or SIGKILL (`force == true`).
+    /// Refuses pid <= 1 and the current process.
+    func kill(pid: Int32, force: Bool = false) -> Bool {
+        guard pid > 1, pid != getpid() else { return false }
+        return Darwin.kill(pid, force ? SIGKILL : SIGTERM) == 0
     }
 }

@@ -39,7 +39,7 @@ final class StatusBarController {
         statusItem = NSStatusBar.system.statusItem(withLength: fixedLen)
 
         popover = NSPopover()
-        popover.contentSize = NSSize(width: 360, height: 580)
+        popover.contentSize = NSSize(width: 360, height: 620)
         popover.behavior = .transient
         popover.animates = true
         popover.contentViewController = NSHostingController(
@@ -229,6 +229,16 @@ final class StatusBarController {
                                  accessibilityDescription: nil)
         menu.addItem(copyItem)
 
+        let exportItem = NSMenuItem(
+            title: "Export Metrics CSV…",
+            action: #selector(exportMetricsCSV),
+            keyEquivalent: "e"
+        )
+        exportItem.target = self
+        exportItem.image = NSImage(systemSymbolName: "square.and.arrow.down",
+                                   accessibilityDescription: nil)
+        menu.addItem(exportItem)
+
         menu.addItem(.separator())
 
         // Quick Actions submenu
@@ -273,6 +283,38 @@ final class StatusBarController {
         quickActionsItem.image = NSImage(systemSymbolName: "bolt.fill",
                                          accessibilityDescription: nil)
         menu.addItem(quickActionsItem)
+
+        // Alerts submenu
+        let alertsMenu = NSMenu()
+
+        let alertsToggle = NSMenuItem(
+            title: "Enable Alerts",
+            action: #selector(toggleAlerts),
+            keyEquivalent: ""
+        )
+        alertsToggle.target = self
+        alertsToggle.state = (viewModel?.alertsEnabled ?? false) ? .on : .off
+        alertsMenu.addItem(alertsToggle)
+
+        let testAlertItem = NSMenuItem(
+            title: "Send Test Notification",
+            action: #selector(sendTestNotification),
+            keyEquivalent: ""
+        )
+        testAlertItem.target = self
+        testAlertItem.image = NSImage(systemSymbolName: "bell.badge",
+                                      accessibilityDescription: nil)
+        alertsMenu.addItem(testAlertItem)
+
+        let alertsItem = NSMenuItem(
+            title: "Alerts",
+            action: nil,
+            keyEquivalent: ""
+        )
+        alertsItem.submenu = alertsMenu
+        alertsItem.image = NSImage(systemSymbolName: "bell",
+                                   accessibilityDescription: nil)
+        menu.addItem(alertsItem)
 
         menu.addItem(.separator())
 
@@ -320,7 +362,35 @@ final class StatusBarController {
         lines.append("CPU: \(String(format: "%.1f%%", s.cpu.totalUsage)) (\(s.cpu.coreCount) cores)")
         lines.append("Memory: \(String(format: "%.1f%%", s.memory.usagePercent)) (\(formatBytes(s.memory.usedBytes)) / \(formatBytes(s.memory.totalBytes)))")
         lines.append("Network: ↑\(Self.formatSpeed(s.network.bytesSentPerSec))/s  ↓\(Self.formatSpeed(s.network.bytesReceivedPerSec))/s")
+        lines.append("Network session: ↑\(formatBytes(s.network.sessionSentBytes))  ↓\(formatBytes(s.network.sessionReceivedBytes))")
         lines.append("Disk: \(String(format: "%.1f%%", s.disk.usagePercent)) (\(formatBytes(s.disk.usedBytes)) / \(formatBytes(s.disk.totalBytes)))")
+        lines.append("Disk I/O: read \(Self.formatSpeed(s.disk.readBytesPerSec))/s  write \(Self.formatSpeed(s.disk.writeBytesPerSec))/s")
+
+        if s.gpu.isAvailable {
+            var gpu = "GPU: \(String(format: "%.1f%%", s.gpu.utilizationPercent))"
+            if !s.gpu.name.isEmpty { gpu += " (\(s.gpu.name))" }
+            if s.gpu.memoryTotalBytes > 0 {
+                gpu += " mem \(formatBytes(s.gpu.memoryUsedBytes)) / \(formatBytes(s.gpu.memoryTotalBytes))"
+            }
+            lines.append(gpu)
+        }
+
+        if s.sensors.isAvailable {
+            var sensors: [String] = []
+            if let temp = s.sensors.cpuTemperature {
+                sensors.append("CPU \(String(format: "%.1f°C", temp))")
+            }
+            for fan in s.sensors.fans {
+                sensors.append("Fan \(fan.index) \(fan.rpm) RPM")
+            }
+            if !sensors.isEmpty {
+                lines.append("Sensors: " + sensors.joined(separator: "  "))
+            }
+        }
+
+        if s.connections.isAvailable {
+            lines.append("TCP: \(s.connections.established) established, \(s.connections.listening) listening, \(s.connections.total) total")
+        }
 
         if s.battery.isPresent {
             var bat = "Battery: \(String(format: "%.0f%%", s.battery.chargePercent))"
@@ -329,9 +399,43 @@ final class StatusBarController {
             lines.append(bat)
         }
 
+        if !vm.activeAlerts.isEmpty {
+            lines.append("Active alerts: " + vm.activeAlerts.map { $0.title }.joined(separator: ", "))
+        }
+
         let text = lines.joined(separator: "\n")
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    @objc private func exportMetricsCSV() {
+        guard let vm = viewModel else { return }
+
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = MetricsExporter.suggestedFileName()
+        panel.canCreateDirectories = true
+        panel.title = "Export MacStats session metrics"
+
+        NSApp.activate(ignoringOtherApps: true)
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        let csv = vm.csvSnapshot()
+        do {
+            try csv.write(to: url, atomically: true, encoding: .utf8)
+        } catch {
+            NSSound.beep()
+        }
+    }
+
+    @objc private func toggleAlerts(_ sender: NSMenuItem) {
+        guard let vm = viewModel else { return }
+        let enabled = !vm.alertsEnabled
+        vm.setAlertsEnabled(enabled)
+        sender.state = enabled ? .on : .off
+    }
+
+    @objc private func sendTestNotification() {
+        viewModel?.sendTestNotification()
     }
 
     @objc private func toggleLaunchAtLogin() {
