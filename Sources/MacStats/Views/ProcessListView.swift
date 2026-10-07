@@ -7,12 +7,18 @@ struct ProcessListView: View {
     @ObservedObject var viewModel: StatsViewModel
     @Binding var sort: ProcessSortKey
 
-    @State private var query = ""
-    @State private var searchDebounce: Task<Void, Never>?
-
     private static let limits = [5, 10, 20]
 
     private var processes: [TopProcess] { viewModel.processes }
+
+    /// The search field writes through the view model, which debounces the
+    /// rescan; `@State` would be a macro in the macOS 26+ SDK, so no local copy.
+    private var searchText: Binding<String> {
+        Binding(
+            get: { viewModel.processSearch },
+            set: { viewModel.updateProcessSearch($0) }
+        )
+    }
 
     var body: some View {
         Panel {
@@ -78,6 +84,19 @@ struct ProcessListView: View {
                         }
                     }
                 }
+
+                if let message = viewModel.processActionMessage {
+                    HStack(spacing: DS.Space.xs) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundColor(DS.Palette.warn)
+                        Text(message)
+                            .font(DS.Text.micro)
+                            .foregroundColor(DS.Palette.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .accessibilityElement(children: .combine)
+                }
             }
         }
         .onAppear {
@@ -85,9 +104,6 @@ struct ProcessListView: View {
         }
         .onChange(of: sort) { newValue in
             viewModel.setProcessSort(newValue)
-        }
-        .onDisappear {
-            searchDebounce?.cancel()
         }
     }
 
@@ -97,17 +113,13 @@ struct ProcessListView: View {
                 .font(.system(size: 9, weight: .semibold))
                 .foregroundColor(DS.Palette.tertiary)
 
-            TextField("Filter by name or path", text: $query)
+            TextField("Filter by name or path", text: searchText)
                 .textFieldStyle(.plain)
                 .font(DS.Text.body)
-                .onChange(of: query) { newValue in
-                    scheduleSearch(newValue)
-                }
 
-            if !query.isEmpty {
+            if !viewModel.processSearch.isEmpty {
                 Button {
-                    query = ""
-                    scheduleSearch("")
+                    viewModel.updateProcessSearch("")
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 9))
@@ -128,14 +140,14 @@ struct ProcessListView: View {
     @ViewBuilder
     private var emptyState: some View {
         HStack(spacing: DS.Space.s) {
-            if query.isEmpty {
+            if viewModel.processSearch.isEmpty {
                 ProgressView()
                     .controlSize(.small)
                 Text("Sampling…")
                     .font(DS.Text.body)
                     .foregroundColor(DS.Palette.secondary)
             } else {
-                Text("No processes match “\(query)”")
+                Text("No processes match “\(viewModel.processSearch)”")
                     .font(DS.Text.body)
                     .foregroundColor(DS.Palette.secondary)
             }
@@ -144,15 +156,6 @@ struct ProcessListView: View {
         .padding(.vertical, DS.Space.s)
     }
 
-    /// Typing should not run a full `proc_pidinfo` sweep on every keystroke.
-    private func scheduleSearch(_ text: String) {
-        searchDebounce?.cancel()
-        searchDebounce = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 250_000_000)
-            guard !Task.isCancelled else { return }
-            viewModel.setProcessSearch(text)
-        }
-    }
 }
 
 private struct ProcessRow: View {

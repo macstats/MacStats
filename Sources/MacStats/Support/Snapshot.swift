@@ -8,7 +8,23 @@ import SwiftUI
 /// `MacStats --snapshot assets/screenshot.png [dark]`
 enum Snapshot {
 
-    static func render(to path: String, dark: Bool, width: CGFloat = DS.Layout.popoverWidth, height: CGFloat = 600) {
+    static func render(
+        to path: String,
+        dark: Bool,
+        width: CGFloat = DS.Layout.popoverWidth,
+        height: CGFloat = DS.Layout.popoverHeight
+    ) {
+        // `MACSTATS_POPOVER_HEIGHT` also drives the view's own frame, so the
+        // captured bitmap has to use the same height or the tall render is
+        // clipped back to the default.
+        let height: CGFloat = {
+            if let raw = ProcessInfo.processInfo.environment["MACSTATS_POPOVER_HEIGHT"],
+               let value = Double(raw), value > 0 {
+                return CGFloat(value)
+            }
+            return height
+        }()
+
         let settings = AppSettings()
         let viewModel = StatsViewModel(settings: settings)
         viewModel.isPopoverVisible = true

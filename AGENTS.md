@@ -32,13 +32,15 @@ SKIP 原因并保持退出码 0，汇总行写明"未校验启动"，校验通�
 - **零外部依赖**：只用 Apple 系统框架（AppKit、SwiftUI、IOKit、Combine、CoreWLAN、
   CoreLocation、ServiceManagement 等）。不加第三方包、不依赖 brew、不联网下载；新代码
   必须能被 `Scripts/build.sh` 直接编译。
-- **构建环境**：构建/运行需要完整 Xcode。macOS 26/27 SDK 把 `@State` 等实现成外部宏
-  （`SwiftUIMacros` 插件，只随 Xcode 分发），只装 Command Line Tools 时 `Scripts/build.sh`、
-  `Scripts/bench.sh`、`Scripts/verify.sh`（[0/4] 探测即失败）都会失败；`swift test` 还需要 Xcode 的
-  `XCTest.framework`，同样不可用。本机当前就是 CLT-only（`xcode-select -p` =
-  `/Library/Developer/CommandLineTools`，`/Applications` 下没有 Xcode.app），此时可用的验证是
-  `swift build --target MacStatsCore`（纯逻辑，不依赖 SwiftUI 宏）。恢复方式：装完整 Xcode 并让
-  `xcode-select -p` 指向 `Xcode.app/Contents/Developer`。
+- **构建环境**：`Scripts/build.sh` / `Scripts/bench.sh` / `Scripts/verify.sh` 在只装 Xcode
+  Command Line Tools 的机器上就能跑通（本机即如此）。两条红线：
+  1. **不要用 `@State`**（以及 `#Preview`、`@Entry` 等）——macOS 26+ SDK 把它们实现成外部宏，
+     插件只随完整 Xcode 分发，CLT-only 编译必然失败；UI 状态用 `@StateObject` /
+     `@ObservedObject` / `Binding` / `@Environment`（这些仍是普通 property wrapper）。
+  2. `swift test` 需要完整 Xcode 的 `XCTest.framework`，CLT-only 下用
+     `bash Tests/run-tests.sh`（Swift Testing + 插件路径）替代。
+- **快照调试**：`MACSTATS_POPOVER_HEIGHT=1700 .build/debug/MacStats --snapshot /tmp/full.png`
+  可以渲染出完整高度（默认 620 只截到折叠线以上），用于检查下方面板。
 - **性能护栏**：任何改动后跑 `bash Scripts/bench.sh 200`，采样 pass 的 avg/p95 必须与
   `docs/performance.md` 记录保持同一数量级（v2.0 基线：refresh avg 0.049 ms、
   p95 0.053 ms、最差 0.074 ms）。数量级偏差视为性能回退，先用 `--benchmark` 的

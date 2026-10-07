@@ -62,8 +62,10 @@ final class GPUMonitor {
         ]) ?? 0
 
         stats.memoryUsedBytes = used
-        let derivedTotal = total > 0 ? total : (used + free)
-        stats.memoryTotalBytes = max(derivedTotal, used)
+        // Only report a total when the driver actually exposes one, otherwise the
+        // UI would render "used / used" as a misleading 100% bar.
+        let derivedTotal = total > 0 ? total : (free > 0 ? used + free : 0)
+        stats.memoryTotalBytes = max(derivedTotal, used > 0 && total > 0 ? used : 0)
         stats.coreCount = Int(firstDouble(in: perf, keys: ["gpuCoreCount", "NumLogicalCores"]) ?? 0)
         stats.name = acceleratorName(service, props: props)
 

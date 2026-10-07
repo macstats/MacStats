@@ -54,6 +54,9 @@ final class StatsViewModel: ObservableObject {
     /// Alert master switch, mirrored into `AlertCenter` (UserDefaults-backed).
     @Published var alertsEnabled: Bool = true
 
+    /// Transient message shown by the process card (e.g. a denied kill).
+    @Published var processActionMessage: String?
+
     // MARK: - Wiring
 
     /// Status-bar channel: a plain callback, deliberately outside SwiftUI.
@@ -117,6 +120,7 @@ final class StatsViewModel: ObservableObject {
     private var querySort: ProcessSortKey = .cpu
     private var querySearch = ""
     private var queryLimit = 5
+    private var searchDebounce: DispatchWorkItem?
 
     // MARK: - Lifecycle
 
@@ -313,6 +317,28 @@ final class StatsViewModel: ObservableObject {
         updateQuery(search: text)
     }
 
+    /// Debounced variant used by the search field: the text updates immediately,
+    /// the (comparatively expensive) rescan happens 0.3 s after the last keystroke.
+    func updateProcessSearch(_ text: String) {
+        processSearch = text
+        searchDebounce?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.setProcessSearch(text)
+        }
+        searchDebounce = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+    }
+
+    /// Surfaces a transient message in the process card (e.g. kill denied).
+    func reportProcessError(_ message: String) {
+        processActionMessage = message
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
+            if self?.processActionMessage == message {
+                self?.processActionMessage = nil
+            }
+        }
+    }
+
     func setProcessLimit(_ limit: Int) {
         processLimit = limit
         updateQuery(limit: limit)
@@ -323,7 +349,13 @@ final class StatsViewModel: ObservableObject {
     func kill(pid: Int32, force: Bool = false) {
         workQueue.async { [weak self] in
             guard let self, !self.suspended else { return }
-            guard self.monitor.killProcess(pid: pid, force: force) else { return }
+            let killed = self.monitor.killProcess(pid: pid, force: force)
+            guard killed else {
+                DispatchQueue.main.async {
+                    self.reportProcessError("Could not signal pid \(pid) — try again with more privileges.")
+                }
+                return
+            }
             self.forceProcessSample = true
             self.tick()
         }

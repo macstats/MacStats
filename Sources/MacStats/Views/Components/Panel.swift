@@ -159,7 +159,10 @@ struct LegendDot: View {
 
 /// Row hover highlight, used by the process list.
 struct HoverHighlight: ViewModifier {
-    @State private var hovering = false
+    // `@State` is an external macro in the macOS 26+ SDK (it needs Xcode's
+    // SwiftUIMacros plugin); an `ObservableObject` keeps this file buildable
+    // with a Command Line Tools–only toolchain.
+    @StateObject private var hover = HoverState()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func body(content: Content) -> some View {
@@ -167,9 +170,13 @@ struct HoverHighlight: ViewModifier {
             .padding(.horizontal, DS.Space.xs)
             .background(
                 RoundedRectangle(cornerRadius: DS.Radius.s, style: .continuous)
-                    .fill(hovering ? DS.Palette.hover : Color.clear)
+                    .fill(hover.hovering ? DS.Palette.hover : Color.clear)
             )
-            .onHover { hovering = $0 }
-            .animation(reduceMotion ? DS.Motion.none : DS.Motion.hover, value: hovering)
+            .onHover { hover.hovering = $0 }
+            .animation(reduceMotion ? DS.Motion.none : DS.Motion.hover, value: hover.hovering)
     }
+}
+
+private final class HoverState: ObservableObject {
+    @Published var hovering = false
 }

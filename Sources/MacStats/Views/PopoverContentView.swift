@@ -5,11 +5,23 @@ import SwiftUI
 struct PopoverContentView: View {
     @ObservedObject var viewModel: StatsViewModel
     @ObservedObject var settings: AppSettings
-    @State private var launchAtLogin = AppActions.isLaunchAtLoginEnabled
+    // `@State` is a macro in the macOS 26+ SDK; a `@StateObject` store keeps
+    // this view CLT-buildable. See `HoverHighlight` for the same reasoning.
+    @StateObject private var ui = PopoverUIState()
 
     private var version: String {
         let value = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-        return value ?? "2.0"
+        return value ?? "2.1"
+    }
+
+    /// Snapshot renders can grow the popover so panels below the fold are
+    /// captured too (`MACSTATS_POPOVER_HEIGHT=1600 MacStats --snapshot …`).
+    private var popoverHeight: CGFloat {
+        if let raw = ProcessInfo.processInfo.environment["MACSTATS_POPOVER_HEIGHT"],
+           let value = Double(raw), value > 0 {
+            return CGFloat(value)
+        }
+        return DS.Layout.popoverHeight
     }
 
     var body: some View {
@@ -89,7 +101,7 @@ struct PopoverContentView: View {
 
             footer
         }
-        .frame(width: DS.Layout.popoverWidth, height: 620)
+        .frame(width: DS.Layout.popoverWidth, height: popoverHeight)
     }
 
     private var footer: some View {
@@ -164,12 +176,16 @@ struct PopoverContentView: View {
             }
         }
 
-        Toggle("Launch at Login", isOn: $launchAtLogin)
-            .onChange(of: launchAtLogin) { newValue in
+        Toggle("Launch at Login", isOn: $ui.launchAtLogin)
+            .onChange(of: ui.launchAtLogin) { newValue in
                 if newValue != AppActions.isLaunchAtLoginEnabled {
                     AppActions.toggleLaunchAtLogin()
                 }
-                launchAtLogin = AppActions.isLaunchAtLoginEnabled
+                ui.launchAtLogin = AppActions.isLaunchAtLoginEnabled
             }
     }
+}
+
+private final class PopoverUIState: ObservableObject {
+    @Published var launchAtLogin = AppActions.isLaunchAtLoginEnabled
 }

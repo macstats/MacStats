@@ -26,6 +26,7 @@ enum DS {
 
     enum Layout {
         static let popoverWidth: CGFloat = 360
+        static let popoverHeight: CGFloat = 620
         static let popoverMinHeight: CGFloat = 520
         static let popoverMaxHeight: CGFloat = 640
         static let panelPadding: CGFloat = 12

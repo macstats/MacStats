@@ -36,6 +36,11 @@ struct GPUDetailView: View, Equatable {
                             .font(DS.Text.label)
                             .foregroundColor(DS.Palette.secondary)
                             .monospacedDigit()
+                    } else if stats.memoryUsedBytes > 0 {
+                        Text("\(Format.bytes(stats.memoryUsedBytes)) in use")
+                            .font(DS.Text.label)
+                            .foregroundColor(DS.Palette.secondary)
+                            .monospacedDigit()
                     }
                 }
 
@@ -49,7 +54,12 @@ struct GPUDetailView: View, Equatable {
                 .frame(height: 22)
 
                 HStack(spacing: DS.Space.l) {
-                    GPUValue(label: "Memory", value: Format.percent(stats.memoryUsagePercent, decimals: 0))
+                    GPUValue(
+                        label: "Memory",
+                        value: stats.memoryTotalBytes > 0
+                            ? Format.percent(stats.memoryUsagePercent, decimals: 0)
+                            : "—"
+                    )
                     GPUValue(
                         label: "Cores",
                         value: stats.coreCount > 0 ? "\(stats.coreCount)" : "—"

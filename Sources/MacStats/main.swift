@@ -23,6 +23,18 @@ if CommandLine.arguments.contains("--dump-once") {
     exit(0)
 }
 
+// Diagnostics that exercise the process kill path with a disposable child.
+if CommandLine.arguments.contains("--kill-test") {
+    DumpOnce.runKillTest()
+    exit(0)
+}
+
+// Feeds synthetic threshold breaches through AlertCenter.
+if CommandLine.arguments.contains("--alert-test") {
+    DumpOnce.runAlertTest()
+    exit(0)
+}
+
 let app = NSApplication.shared
 // Deliberate product choice: MacStats lives in the menu bar only, with no
 // Dock icon and no main window.

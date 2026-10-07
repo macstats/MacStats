@@ -12,6 +12,23 @@ network, disk, battery and Wi-Fi stats — zero dependencies, pure Swift.
   <img src="assets/screenshot-dark.png" alt="MacStats popover in dark mode" width="360">
 </p>
 
+## What's new in 2.1
+
+- **GPU panel** — utilization, GPU name and memory in use, read from
+  `IOAccelerator` driver statistics.
+- **Thermals** — CPU temperature and fan RPM straight from the AppleSMC.
+- **TCP connections** — established / listening / time-wait counts plus
+  listening ports, enumerated in-process with libproc (no `netstat` subprocess).
+- **Real disk throughput** — read/write rates and session totals from
+  `IOBlockStorageDriver` byte counters.
+- **Process manager** — top 5/10/20, sort by CPU or memory, filter by name or
+  executable path, and quit or force-quit from a row's context menu.
+- **Threshold alerts** — an in-popover banner plus native notifications for CPU,
+  memory, disk, battery, thermal and temperature breaches, rate-limited per
+  condition.
+- **CSV export** — write the bounded session buffer (~2 h) to a
+  spreadsheet-ready file from either menu.
+
 ## What's new in 2.0
 
 - **Restyled around a single instrument surface.** Four gauges (CPU, memory,
@@ -41,17 +58,22 @@ network, disk, battery and Wi-Fi stats — zero dependencies, pure Swift.
 
 - Overview cluster: CPU / memory / disk gauges + network speeds + CPU trace
 - Per-core CPU equalizer with load averages and busiest core
+- GPU utilization, name and memory in use
 - Memory composition (active, wired, compressed, free) with pressure state
-- Network channels with shared-scale traces and session totals
+- Network channels with shared-scale traces, session totals and TCP state chips
 - Wi-Fi signal, SSID, IP, channel/band and link rate
-- Disk capacity for the boot volume
+- Disk capacity for the boot volume, plus live read/write throughput
+- Thermals from the AppleSMC (CPU temperature, fan RPM) when available
 - Battery charge, time estimate, health, cycles and temperature
-- Top 5 processes, sortable by CPU or memory
+- Process browser: top 5/10/20, sortable by CPU or memory, filterable, with
+  quit / force-quit actions
+- Alert banner for active threshold breaches
 
 **Right-click Menu / Popover "…" Menu**:
 
-- Open Activity Monitor · Copy stats summary
+- Open Activity Monitor · Copy stats summary · Export Metrics CSV
 - Quick Actions: Sleep Display, Toggle Dark Mode, Restart Finder
+- Alerts: enable/disable threshold alerts, send a test notification
 - Menu bar style · Refresh rate · Launch at Login
 
 MacStats runs as a menu-bar-only agent (`.accessory`): no Dock icon, no main
@@ -102,6 +124,19 @@ bash Scripts/bench.sh 200
 # regenerate the README screenshots from the real view tree
 .build/debug/MacStats --snapshot assets/screenshot.png
 .build/debug/MacStats --snapshot assets/screenshot-dark.png dark
+
+# one-command verification (toolchain probe → build → bench → launch check)
+bash Scripts/verify.sh
+```
+
+### Headless diagnostics
+
+The binary doubles as a diagnostic tool — no GUI session required:
+
+```bash
+.build/debug/MacStats --dump-once    # one real sample of every monitor, then exit
+.build/debug/MacStats --kill-test    # spawn a disposable child, find it, SIGTERM it
+.build/debug/MacStats --alert-test   # feed synthetic breaches through AlertCenter
 ```
 
 ## Architecture

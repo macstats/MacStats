@@ -64,22 +64,23 @@ echo "MacStats verify — $(date '+%Y-%m-%d %H:%M:%S')"
 echo "repo: ${ROOT_DIR}"
 
 echo
-echo "==> [0/4] 工具链探测：SwiftUI 宏（@State）能否编译"
+echo "==> [0/4] 工具链探测：SwiftUI 能否编译（CLT-only 亦可）"
 SDK_PATH="$(xcrun --show-sdk-path 2>/dev/null || true)"
 if printf '%s\n' \
     'import SwiftUI' \
-    'struct VerifyProbe: View { @State private var probe = 0; var body: some View { Text("probe") } }' \
+    'struct VerifyProbe: View { var body: some View { Text("probe") } }' \
     | swiftc -sdk "${SDK_PATH}" -typecheck - >"${PROBE_LOG}" 2>&1; then
-    echo "    [0/4] OK：@State 可编译（sdk: ${SDK_PATH}）"
+    echo "    [0/4] OK：SwiftUI 可编译（sdk: ${SDK_PATH}）"
 else
-    echo "    [0/4] FAILED：当前工具链编译不了 SwiftUI 宏（@State）" >&2
+    echo "    [0/4] FAILED：当前工具链编译不了 SwiftUI" >&2
     echo "    xcode-select -p = $(xcode-select -p 2>/dev/null || echo 未知)" >&2
     echo "    sdk = ${SDK_PATH:-未知}" >&2
     echo "    探针错误（首条）：" >&2
     grep -m1 'error:' "${PROBE_LOG}" >&2 || true
-    echo "    真实原因：macOS 26/27 SDK 把 @State 等实现为外部宏（SwiftUIMacros 插件），该插件只随完整" >&2
-    echo "    Xcode 分发；只装 Command Line Tools 时必然失败。" >&2
-    echo "    修复：安装完整 Xcode，并让 xcode-select -p 指向 Xcode.app/Contents/Developer 后重跑。" >&2
+    echo "    真实原因：工具链不完整（缺 SDK 或 SwiftUI 模块）；安装 Xcode Command Line Tools" >&2
+    echo "    （xcode-select --install）后重跑。" >&2
+    echo "    注意：本项目不能用 @State 等 SwiftUI 宏（macOS 26+ SDK 把它们实现为外部宏，插件只在" >&2
+    echo "    完整 Xcode 里），UI 状态请用 @StateObject/@ObservedObject/Binding。" >&2
     echo "    环境不可编译不算通过，本脚本以非零退出码结束；纯逻辑编译校验可用 swift build --target MacStatsCore。" >&2
     exit 1
 fi

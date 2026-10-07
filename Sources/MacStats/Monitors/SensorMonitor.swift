@@ -11,38 +11,38 @@ private typealias SMCBytes = (
     UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8
 )
 
-private struct SMCVersion {
-    var major: UInt8 = 0
-    var minor: UInt8 = 0
-    var build: UInt8 = 0
-    var reserved: UInt8 = 0
-    var release: UInt16 = 0
-}
-
-private struct SMCPLimitData {
-    var version: UInt16 = 0
-    var length: UInt16 = 0
-    var cpuPLimit: UInt32 = 0
-    var gpuPLimit: UInt32 = 0
-    var memPLimit: UInt32 = 0
-}
-
-private struct SMCKeyInfo {
-    var dataSize: UInt32 = 0
-    var dataType: UInt32 = 0
-    var dataAttributes: UInt8 = 0
-}
-
+/// `SMCKeyData_t` flattened with explicit padding so the Swift layout matches the
+/// C struct byte for byte (80 bytes). Nested Swift structs are packed by size
+/// rather than by C stride, which silently produced a 76-byte struct and made
+/// every IOConnectCallStructMethod return `kIOReturnBadArgument`.
+///
+/// C layout: key(0) vers(4..10) pLimitData(12..28) keyInfo(28..40)
+///           result(40) status(41) data8(42) data32(44) bytes(48..80)
 private struct SMCKeyData {
-    var key: UInt32 = 0
-    var vers = SMCVersion()
-    var pLimitData = SMCPLimitData()
-    var keyInfo = SMCKeyInfo()
-    var result: UInt8 = 0
-    var status: UInt8 = 0
-    var data8: UInt8 = 0
-    var data32: UInt32 = 0
-    var bytes: SMCBytes = (
+    var key: UInt32 = 0                 // 0
+    var versMajor: UInt8 = 0            // 4
+    var versMinor: UInt8 = 0            // 5
+    var versBuild: UInt8 = 0            // 6
+    var versReserved: UInt8 = 0         // 7
+    var versRelease: UInt16 = 0         // 8
+    var pad0: UInt16 = 0                // 10 — aligns pLimitData to 12
+    var plimitVersion: UInt16 = 0       // 12
+    var plimitLength: UInt16 = 0        // 14
+    var plimitCPU: UInt32 = 0           // 16
+    var plimitGPU: UInt32 = 0           // 20
+    var plimitMem: UInt32 = 0           // 24
+    var infoDataSize: UInt32 = 0        // 28
+    var infoDataType: UInt32 = 0        // 32
+    var infoAttributes: UInt8 = 0       // 36
+    var pad1: UInt8 = 0                 // 37
+    var pad2: UInt8 = 0                 // 38
+    var pad3: UInt8 = 0                 // 39
+    var result: UInt8 = 0               // 40
+    var status: UInt8 = 0               // 41
+    var data8: UInt8 = 0                // 42
+    var pad4: UInt8 = 0                 // 43
+    var data32: UInt32 = 0              // 44
+    var bytes: SMCBytes = (             // 48 .. 80
         0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0,
@@ -60,10 +60,14 @@ final class SensorMonitor {
     private static let commandReadBytes: UInt8 = 5
     private static let commandReadKeyInfo: UInt8 = 9
 
-    /// Apple Silicon performance/efficiency cores first, then Intel sensors.
+    /// CPU-ish sensors, most specific first:
+    /// Apple Silicon `Tp0*` cores → newer-SMC `Tc0*`/`TCM*` clusters →
+    /// Intel `TC0*` proximity/die → heat pipe / PMU fallbacks.
     private let temperatureKeys = [
         "Tp09", "Tp05", "Tp01", "Tp0D", "Tp0b", "Tp0f",
+        "Tc0x", "Tc0z", "Tc0a", "Tc0b", "TCMz", "TCMb",
         "TC0P", "TC0D", "TC0E", "TC0F",
+        "TCHP", "TPMP", "TPSP",
     ]
 
     func read() -> SensorStats {
@@ -98,12 +102,14 @@ final class SensorMonitor {
             var fans: [FanStats] = []
             for index in 0..<min(Int(fanCount), 4) {
                 guard let actual = readKey(conn, "F\(index)Ac"),
-                      let rpm = decodeFPE2(actual.bytes) else { continue }
+                      let rpm = decodeFanRPM(bytes: actual.bytes, type: actual.dataType) else { continue }
                 var fan = FanStats(index: index, rpm: rpm)
-                if let minReading = readKey(conn, "F\(index)Mn"), let minRPM = decodeFPE2(minReading.bytes) {
+                if let minReading = readKey(conn, "F\(index)Mn"),
+                   let minRPM = decodeFanRPM(bytes: minReading.bytes, type: minReading.dataType) {
                     fan.minRPM = minRPM
                 }
-                if let maxReading = readKey(conn, "F\(index)Mx"), let maxRPM = decodeFPE2(maxReading.bytes) {
+                if let maxReading = readKey(conn, "F\(index)Mx"),
+                   let maxRPM = decodeFanRPM(bytes: maxReading.bytes, type: maxReading.dataType) {
                     fan.maxRPM = maxRPM
                 }
                 fans.append(fan)
@@ -142,17 +148,17 @@ final class SensorMonitor {
         infoInput.data8 = Self.commandReadKeyInfo
         guard let infoOutput = call(conn, &infoInput) else { return nil }
 
-        let dataSize = infoOutput.keyInfo.dataSize
+        let dataSize = infoOutput.infoDataSize
         guard dataSize > 0, dataSize <= 32 else { return nil }
 
         var readInput = SMCKeyData()
         readInput.key = code
-        readInput.keyInfo.dataSize = dataSize
+        readInput.infoDataSize = dataSize
         readInput.data8 = Self.commandReadBytes
         guard let readOutput = call(conn, &readInput) else { return nil }
 
         let bytes = withUnsafeBytes(of: readOutput.bytes) { Array($0.prefix(Int(dataSize))) }
-        return (dataSize, infoOutput.keyInfo.dataType, bytes)
+        return (dataSize, infoOutput.infoDataType, bytes)
     }
 
     // MARK: - Decoding
@@ -163,16 +169,55 @@ final class SensorMonitor {
             guard bytes.count >= 2 else { return nil }
             return Double(Int8(bitPattern: bytes[0])) + Double(bytes[1]) / 256.0
         case "flt ":
-            guard bytes.count >= 4 else { return nil }
-            let bits = UInt32(bytes[0]) << 24 | UInt32(bytes[1]) << 16 | UInt32(bytes[2]) << 8 | UInt32(bytes[3])
-            let value = Double(Float(bitPattern: bits))
-            return value.isFinite ? value : nil
+            return decodeFloat(bytes)
         default:
             return nil
         }
     }
 
-    /// fpe2: unsigned 14.2 fixed point (fan RPM).
+    /// `flt ` is big-endian IEEE 754 on Intel SMC firmware and little-endian on
+    /// the Apple Silicon SMC; pick whichever interpretation is plausible.
+    private func decodeFloat(_ bytes: [UInt8]) -> Double? {
+        guard bytes.count >= 4 else { return nil }
+        let bigEndianBits = UInt32(bytes[0]) << 24 | UInt32(bytes[1]) << 16 | UInt32(bytes[2]) << 8 | UInt32(bytes[3])
+        let littleEndianBits = UInt32(bytes[0]) | UInt32(bytes[1]) << 8 | UInt32(bytes[2]) << 16 | UInt32(bytes[3]) << 24
+        let big = Double(Float(bitPattern: bigEndianBits))
+        let little = Double(Float(bitPattern: littleEndianBits))
+
+        // A denormalized byte pattern (e.g. 1e-38) is technically finite and
+        // positive, so require a physically sensible temperature range.
+        let bigPlausible = big.isFinite && big >= 5 && big <= 130
+        let littlePlausible = little.isFinite && little >= 5 && little <= 130
+
+        if bigPlausible { return big }
+        if littlePlausible { return little }
+        return nil
+    }
+
+    /// Fan keys are `flt ` on Apple Silicon and `fpe2`/`ui16` on older Intel SMC.
+    private func decodeFanRPM(bytes: [UInt8], type: UInt32) -> Int? {
+        switch typeString(type) {
+        case "flt ":
+            guard bytes.count >= 4 else { return nil }
+            let littleEndianBits = UInt32(bytes[0]) | UInt32(bytes[1]) << 8 | UInt32(bytes[2]) << 16 | UInt32(bytes[3]) << 24
+            let bigEndianBits = UInt32(bytes[0]) << 24 | UInt32(bytes[1]) << 16 | UInt32(bytes[2]) << 8 | UInt32(bytes[3])
+            let little = Double(Float(bitPattern: littleEndianBits))
+            let big = Double(Float(bitPattern: bigEndianBits))
+            let candidates = [little, big].filter { $0.isFinite && $0 >= 0 && $0 <= 20000 }
+            if let spinning = candidates.first(where: { $0 >= 200 }) { return Int(spinning.rounded()) }
+            if let stopped = candidates.first { return Int(stopped.rounded()) }
+            return nil
+        case "fpe2":
+            return decodeFPE2(bytes)
+        case "ui16":
+            guard bytes.count >= 2 else { return nil }
+            return Int(UInt16(bytes[0]) << 8 | UInt16(bytes[1]))
+        default:
+            return decodeFPE2(bytes)
+        }
+    }
+
+    /// fpe2: unsigned 14.2 fixed point (legacy fan RPM).
     private func decodeFPE2(_ bytes: [UInt8]) -> Int? {
         guard bytes.count >= 2 else { return nil }
         return (Int(bytes[0]) << 8 | Int(bytes[1])) / 4

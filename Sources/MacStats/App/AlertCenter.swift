@@ -16,20 +16,33 @@ struct ActiveAlert: Identifiable, Equatable {
 
 /// Threshold evaluation + native notification delivery.
 ///
-/// `evaluate(_:)` runs on the monitor queue on every tick, so it stays cheap
-/// and allocation-light. Notifications are rate-limited per condition with a
-/// cooldown, and both notification entry points no-op when the process is not
-/// running from an app bundle (UserNotifications requires a bundle id).
+/// `evaluate(_:)` runs on the monitor queue every 3s, so all mutable state is
+/// guarded by a lock and notifications are rate-limited per condition.
 final class AlertCenter {
+    struct Thresholds {
+        var cpuPercent: Double = 90
+        var memoryPercent: Double = 90
+        var diskPercent: Double = 92
+        var batteryPercent: Double = 20
+        /// CPU must stay above the threshold for this many consecutive samples.
+        var cpuSustainedTicks: Int = 2
+        /// One notification per condition per cooldown window.
+        var cooldown: TimeInterval = 600
+        /// Tick length, used to phrase "for Ns" in messages.
+        var tickSeconds: Int = 3
+    }
+
     private let enabledKey = "MacStats.alertsEnabled"
     private let defaults: UserDefaults
-    private let postsNotifications: Bool
-    private let cooldown: TimeInterval = 15 * 60
-    /// Confined to the monitor queue.
-    private var lastNotified: [String: Date] = [:]
+    private let allowsNotifications: Bool
+    private let thresholds = Thresholds()
+
+    private let lock = NSLock()
+    private var cpuStreak = 0
+    private var lastDelivered: [String: Date] = [:]
 
     init(postsNotifications: Bool = true, defaults: UserDefaults = .standard) {
-        self.postsNotifications = postsNotifications
+        self.allowsNotifications = postsNotifications
         self.defaults = defaults
         if defaults.object(forKey: enabledKey) == nil {
             defaults.set(true, forKey: enabledKey)
@@ -41,123 +54,83 @@ final class AlertCenter {
         set { defaults.set(newValue, forKey: enabledKey) }
     }
 
-    /// Returns the set of alerts that are active right now.
     func evaluate(_ stats: SystemStats) -> [ActiveAlert] {
-        guard isEnabled else { return [] }
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard isEnabled else {
+            cpuStreak = 0
+            return []
+        }
+
+        if stats.cpu.totalUsage >= thresholds.cpuPercent {
+            cpuStreak += 1
+        } else {
+            cpuStreak = 0
+        }
 
         var alerts: [ActiveAlert] = []
 
-        switch stats.memory.pressure {
-        case .critical:
-            alerts.append(
-                ActiveAlert(
-                    id: "memory-pressure",
-                    title: "Memory pressure critical",
-                    message: "macOS reports critical memory pressure — close heavy apps or add memory.",
-                    severity: .critical
-                )
-            )
-        case .warning:
-            alerts.append(
-                ActiveAlert(
-                    id: "memory-pressure",
-                    title: "Memory pressure warning",
-                    message: "macOS reports elevated memory pressure.",
-                    severity: .warning
-                )
-            )
-        case .normal:
-            break
+        if cpuStreak >= thresholds.cpuSustainedTicks {
+            alerts.append(ActiveAlert(
+                id: "cpu",
+                title: "CPU overloaded",
+                message: String(
+                    format: "CPU at %.1f%% for %ds",
+                    stats.cpu.totalUsage,
+                    cpuStreak * thresholds.tickSeconds
+                ),
+                severity: .critical
+            ))
         }
 
-        if stats.cpu.totalUsage >= 90 {
-            alerts.append(
-                ActiveAlert(
-                    id: "cpu-usage",
-                    title: "CPU near saturation",
-                    message: String(format: "CPU has been at %.0f%%.", stats.cpu.totalUsage),
-                    severity: .warning
-                )
-            )
+        if stats.memory.usagePercent >= thresholds.memoryPercent {
+            alerts.append(ActiveAlert(
+                id: "memory",
+                title: "Memory pressure",
+                message: String(format: "Memory at %.1f%%", stats.memory.usagePercent),
+                severity: .warning
+            ))
         }
 
-        if stats.memory.usagePercent >= 92 {
-            alerts.append(
-                ActiveAlert(
-                    id: "memory-usage",
-                    title: "Memory almost full",
-                    message: String(format: "%.0f%% of physical memory is in use.", stats.memory.usagePercent),
-                    severity: .warning
-                )
-            )
+        if stats.disk.totalBytes > 0, stats.disk.usagePercent >= thresholds.diskPercent {
+            alerts.append(ActiveAlert(
+                id: "disk",
+                title: "Disk almost full",
+                message: String(format: "%.1f%% used — %.0f GB free",
+                                stats.disk.usagePercent,
+                                Double(stats.disk.freeBytes) / (1024 * 1024 * 1024)),
+                severity: .warning
+            ))
         }
 
-        if stats.disk.usagePercent >= 90 {
-            alerts.append(
-                ActiveAlert(
-                    id: "disk-usage",
-                    title: "Startup disk almost full",
-                    message: String(format: "%@ is %.0f%% full.", stats.disk.volumeName, stats.disk.usagePercent),
-                    severity: .warning
-                )
-            )
+        if stats.battery.isPresent, !stats.battery.isPluggedIn,
+           stats.battery.chargePercent < thresholds.batteryPercent {
+            alerts.append(ActiveAlert(
+                id: "battery",
+                title: "Battery low",
+                message: String(format: "%.0f%% left — plug in soon", stats.battery.chargePercent),
+                severity: .warning
+            ))
         }
 
         switch stats.thermalLevel {
-        case .critical:
-            alerts.append(
-                ActiveAlert(
-                    id: "thermal",
-                    title: "Thermal state critical",
-                    message: "The system is thermally throttled; performance is reduced.",
-                    severity: .critical
-                )
-            )
         case .serious:
-            alerts.append(
-                ActiveAlert(
-                    id: "thermal",
-                    title: "Thermal state serious",
-                    message: "The system is running hot and may throttle.",
-                    severity: .warning
-                )
-            )
-        default:
+            alerts.append(ActiveAlert(
+                id: "thermal",
+                title: "Thermal pressure",
+                message: "The system is throttling (serious thermal state)",
+                severity: .warning
+            ))
+        case .critical:
+            alerts.append(ActiveAlert(
+                id: "thermal",
+                title: "Thermal critical",
+                message: "The system is critically hot — performance is reduced",
+                severity: .critical
+            ))
+        case .nominal, .fair:
             break
-        }
-
-        if let temperature = stats.sensors.cpuTemperature, temperature >= 95 {
-            alerts.append(
-                ActiveAlert(
-                    id: "temperature",
-                    title: "CPU temperature high",
-                    message: String(format: "CPU is at %.0f°C.", temperature),
-                    severity: .critical
-                )
-            )
-        }
-
-        if stats.battery.isPresent, !stats.battery.isPluggedIn {
-            let charge = stats.battery.chargePercent
-            if charge <= 10 {
-                alerts.append(
-                    ActiveAlert(
-                        id: "battery",
-                        title: "Battery critically low",
-                        message: String(format: "%.0f%% remaining — plug in now.", charge),
-                        severity: .critical
-                    )
-                )
-            } else if charge <= 20 {
-                alerts.append(
-                    ActiveAlert(
-                        id: "battery",
-                        title: "Battery low",
-                        message: String(format: "%.0f%% remaining.", charge),
-                        severity: .warning
-                    )
-                )
-            }
         }
 
         deliverNotifications(for: alerts)
@@ -165,53 +138,44 @@ final class AlertCenter {
     }
 
     func requestAuthorization() {
-        guard postsNotifications, Bundle.main.bundleIdentifier != nil else { return }
+        guard allowsNotifications, Bundle.main.bundleIdentifier != nil else { return }
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 
     func postTestNotification() {
+        guard allowsNotifications else { return }
+        requestAuthorization()
         post(
-            ActiveAlert(
-                id: "test",
-                title: "MacStats alerts are on",
-                message: "Threshold notifications will look like this.",
-                severity: .warning
-            )
+            title: "MacStats test alert",
+            body: "Notifications work. Threshold alerts will show up here."
         )
     }
 
-    // MARK: - Private
+    // MARK: - Delivery (call with `lock` held)
 
     private func deliverNotifications(for alerts: [ActiveAlert]) {
-        guard postsNotifications else { return }
+        guard allowsNotifications, Bundle.main.bundleIdentifier != nil else { return }
         let now = Date()
         for alert in alerts {
-            if let last = lastNotified[alert.id], now.timeIntervalSince(last) < cooldown {
+            if let last = lastDelivered[alert.id], now.timeIntervalSince(last) < thresholds.cooldown {
                 continue
             }
-            lastNotified[alert.id] = now
-            post(alert)
+            lastDelivered[alert.id] = now
+            post(title: alert.title, body: alert.message)
         }
-        // Forget conditions that have cleared so they can notify again later.
-        let active = Set(alerts.map(\.id))
-        lastNotified = lastNotified.filter { active.contains($0.key) }
     }
 
-    private func post(_ alert: ActiveAlert) {
-        guard postsNotifications, Bundle.main.bundleIdentifier != nil else { return }
+    private func post(title: String, body: String) {
         let content = UNMutableNotificationContent()
-        content.title = alert.title
-        content.body = alert.message
-        if #available(macOS 12.0, *) {
-            content.sound = alert.severity == .critical ? .defaultCritical : .default
-        } else {
-            content.sound = .default
-        }
+        content.title = title
+        content.body = body
+        content.sound = .default
+
         let request = UNNotificationRequest(
-            identifier: "MacStats.\(alert.id).\(Int(Date().timeIntervalSince1970))",
+            identifier: UUID().uuidString,
             content: content,
             trigger: nil
         )
-        UNUserNotificationCenter.current().add(request)
+        UNUserNotificationCenter.current().add(request, withCompletionHandler: nil)
     }
 }
