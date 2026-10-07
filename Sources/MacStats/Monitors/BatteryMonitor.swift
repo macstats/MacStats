@@ -2,6 +2,11 @@ import Foundation
 import IOKit.ps
 
 final class BatteryMonitor {
+    private var cachedSmart = BatterySmartInfo()
+    private var readCount = 0
+    /// Cycle count, design capacity and temperature come from the registry
+    /// and change on the scale of hours — re-read them every few samples.
+    private let smartInterval = 4
 
     func read() -> BatteryStats {
         var stats = BatteryStats()
@@ -33,36 +38,50 @@ final class BatteryMonitor {
         guard stats.isPresent else { return stats }
 
         // AppleSmartBattery: cycle count, design capacity, temperature
-        readSmartBattery(&stats)
+        let needsSmart = readCount % smartInterval == 0 || cachedSmart.designCapacity == 0
+        readCount &+= 1
+        if needsSmart {
+            cachedSmart = readSmartBattery()
+        }
+        stats.cycleCount = cachedSmart.cycleCount
+        stats.designCapacity = cachedSmart.designCapacity
+        stats.temperature = cachedSmart.temperature
+        if cachedSmart.designCapacity > 0 {
+            let maxCapacity = stats.maxCapacity > 0 ? stats.maxCapacity : cachedSmart.maxCapacity
+            stats.healthPercent = Double(maxCapacity) / Double(cachedSmart.designCapacity) * 100.0
+        }
 
         return stats
     }
 
-    private func readSmartBattery(_ stats: inout BatteryStats) {
+    private struct BatterySmartInfo {
+        var cycleCount = 0
+        var designCapacity = 0
+        var maxCapacity = 0
+        var temperature = 0.0
+    }
+
+    private func readSmartBattery() -> BatterySmartInfo {
+        var info = BatterySmartInfo()
         let matching = IOServiceMatching("AppleSmartBattery")
         var service: io_service_t = IO_OBJECT_NULL
         service = IOServiceGetMatchingService(kIOMainPortDefault, matching)
-        guard service != IO_OBJECT_NULL else { return }
+        guard service != IO_OBJECT_NULL else { return info }
         defer { IOObjectRelease(service) }
 
         var propsRef: Unmanaged<CFMutableDictionary>?
         guard IORegistryEntryCreateCFProperties(service, &propsRef, kCFAllocatorDefault, 0) == kIOReturnSuccess,
-              let props = propsRef?.takeRetainedValue() as? [String: Any] else { return }
+              let props = propsRef?.takeRetainedValue() as? [String: Any] else { return info }
 
-        stats.cycleCount = (props["CycleCount"] as? Int) ?? 0
-
-        let designCap = (props["DesignCapacity"] as? Int) ?? 0
-        stats.designCapacity = designCap
-
-        // MaxCapacity from smart battery (more accurate than power source for health calc)
-        let maxCap = (props["MaxCapacity"] as? Int) ?? stats.maxCapacity
-        if designCap > 0 {
-            stats.healthPercent = Double(maxCap) / Double(designCap) * 100.0
-        }
+        info.cycleCount = (props["CycleCount"] as? Int) ?? 0
+        info.designCapacity = (props["DesignCapacity"] as? Int) ?? 0
+        info.maxCapacity = (props["MaxCapacity"] as? Int) ?? 0
 
         // Temperature is in centi-Celsius (e.g. 2930 = 29.30 C)
         if let tempRaw = props["Temperature"] as? Int {
-            stats.temperature = Double(tempRaw) / 100.0
+            info.temperature = Double(tempRaw) / 100.0
         }
+
+        return info
     }
 }

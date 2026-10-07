@@ -1,52 +1,61 @@
-import Foundation
 import Darwin
+import Foundation
 
+/// Interface counters via `getifaddrs`.
+///
+/// Hot-path notes: the interface name is compared as raw C bytes instead of
+/// bridging every interface to a Swift `String`, which removes ~20 string
+/// allocations per sample on a typical Mac. Session totals are accumulated
+/// here so the UI never has to diff counters itself.
 final class NetworkMonitor {
     private var previousBytesSent: UInt64 = 0
     private var previousBytesReceived: UInt64 = 0
     private var previousTimestamp: TimeInterval = 0
+    private var sessionSent: UInt64 = 0
+    private var sessionReceived: UInt64 = 0
+
+    private static let loopbackName = "lo0"
 
     func read() -> NetworkStats {
         var totalSent: UInt64 = 0
         var totalReceived: UInt64 = 0
 
         var ifaddrPtr: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&ifaddrPtr) == 0, let firstAddr = ifaddrPtr else {
+        guard getifaddrs(&ifaddrPtr) == 0, let first = ifaddrPtr else {
             return NetworkStats()
         }
         defer { freeifaddrs(ifaddrPtr) }
 
-        var cursor: UnsafeMutablePointer<ifaddrs>? = firstAddr
+        var cursor: UnsafeMutablePointer<ifaddrs>? = first
         while let ifa = cursor {
-            let addr = ifa.pointee
-            cursor = addr.ifa_next
+            let entry = ifa.pointee
+            cursor = entry.ifa_next
 
-            guard let name = addr.ifa_name else { continue }
-            let ifName = String(cString: name)
-            if ifName == "lo0" { continue }
+            // Family check first: cheapest possible rejection.
+            guard let addr = entry.ifa_addr, addr.pointee.sa_family == UInt8(AF_LINK) else { continue }
+            guard let name = entry.ifa_name else { continue }
+            if strcmp(name, Self.loopbackName) == 0 { continue }
+            guard let data = entry.ifa_data else { continue }
 
-            guard addr.ifa_addr?.pointee.sa_family == UInt8(AF_LINK) else { continue }
-
-            addr.ifa_data.withMemoryRebound(to: if_data.self, capacity: 1) { data in
-                totalSent += UInt64(data.pointee.ifi_obytes)
-                totalReceived += UInt64(data.pointee.ifi_ibytes)
-            }
+            let interfaceData = data.assumingMemoryBound(to: if_data.self).pointee
+            totalSent &+= UInt64(interfaceData.ifi_obytes)
+            totalReceived &+= UInt64(interfaceData.ifi_ibytes)
         }
 
         let now = ProcessInfo.processInfo.systemUptime
 
-        var sentPerSec: Double = 0
-        var receivedPerSec: Double = 0
+        var sentPerSec = 0.0
+        var receivedPerSec = 0.0
 
         if previousTimestamp > 0 {
             let dt = now - previousTimestamp
             if dt > 0 {
-                let sentDelta = totalSent >= previousBytesSent
-                    ? totalSent - previousBytesSent : 0
-                let receivedDelta = totalReceived >= previousBytesReceived
-                    ? totalReceived - previousBytesReceived : 0
+                let sentDelta = totalSent >= previousBytesSent ? totalSent - previousBytesSent : 0
+                let receivedDelta = totalReceived >= previousBytesReceived ? totalReceived - previousBytesReceived : 0
                 sentPerSec = Double(sentDelta) / dt
                 receivedPerSec = Double(receivedDelta) / dt
+                sessionSent &+= sentDelta
+                sessionReceived &+= receivedDelta
             }
         }
 
@@ -54,6 +63,11 @@ final class NetworkMonitor {
         previousBytesReceived = totalReceived
         previousTimestamp = now
 
-        return NetworkStats(bytesSentPerSec: sentPerSec, bytesReceivedPerSec: receivedPerSec)
+        return NetworkStats(
+            bytesSentPerSec: sentPerSec,
+            bytesReceivedPerSec: receivedPerSec,
+            sessionSentBytes: sessionSent,
+            sessionReceivedBytes: sessionReceived
+        )
     }
 }

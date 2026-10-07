@@ -1,77 +1,63 @@
 import SwiftUI
 
-struct DiskDetailView: View {
+struct DiskDetailView: View, Equatable {
     let stats: DiskStats
 
+    private var status: StatusLevel { StatusLevel.usage(stats.usagePercent / 100, elevated: 0.8, critical: 0.92) }
+
+    private var barColor: Color {
+        status == .normal ? DS.Palette.disk : status.color
+    }
+
     var body: some View {
-        SectionCardView {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 14) {
-                    ZStack {
-                        RingView(
-                            progress: stats.usagePercent / 100.0,
-                            lineWidth: 5,
-                            colors: diskGradient(stats.usagePercent)
-                        )
-                        Image(systemName: "internaldrive")
-                            .font(.system(size: 13))
-                            .foregroundColor(.orange)
-                    }
-                    .frame(width: 42, height: 42)
-
-                    VStack(alignment: .leading, spacing: 3) {
-                        HStack(spacing: 5) {
-                            Text("Disk")
-                                .font(.system(size: 13, weight: .semibold))
-                        }
-                        Text("Macintosh HD")
-                            .font(.system(size: 11))
-                            .foregroundColor(.secondary)
-                    }
-
-                    Spacer()
-
-                    Text(String(format: "%.1f%%", stats.usagePercent))
-                        .font(.system(size: 20, weight: .medium, design: .rounded))
-                        .monospacedDigit()
+        Panel {
+            VStack(alignment: .leading, spacing: DS.Space.m) {
+                PanelHeader("Disk", symbol: "internaldrive") {
+                    Text(stats.volumeName)
+                        .font(DS.Text.label)
+                        .foregroundColor(DS.Palette.secondary)
+                        .lineLimit(1)
                 }
 
-                UsageBarView(
-                    value: Double(stats.usedBytes),
-                    maxValue: Double(stats.totalBytes),
-                    color: stats.usagePercent > 85 ? .red : .orange
-                )
+                HStack(alignment: .firstTextBaseline, spacing: DS.Space.s) {
+                    Text(Format.percent(stats.usagePercent, decimals: 1))
+                        .font(DS.Text.metric)
+                        .foregroundColor(status == .normal ? DS.Palette.primary : status.color)
+                        .monospacedDigit()
 
-                HStack {
-                    DiskStat(label: "Used", value: formatBytes(stats.usedBytes))
-                    Spacer()
-                    DiskStat(label: "Free", value: formatBytes(stats.freeBytes))
-                    Spacer()
-                    DiskStat(label: "Total", value: formatBytes(stats.totalBytes))
+                    Spacer(minLength: DS.Space.s)
+
+                    Text("\(Format.bytes(stats.freeBytes)) free")
+                        .font(DS.Text.label)
+                        .foregroundColor(DS.Palette.secondary)
+                }
+
+                ProgressBar(fraction: stats.usagePercent / 100, color: barColor)
+
+                HStack(spacing: DS.Space.l) {
+                    DiskValue(label: "Used", value: Format.bytes(stats.usedBytes))
+                    DiskValue(label: "Free", value: Format.bytes(stats.freeBytes))
+                    DiskValue(label: "Total", value: Format.bytes(stats.totalBytes))
                 }
             }
         }
     }
-
-    private func diskGradient(_ pct: Double) -> [Color] {
-        if pct > 90 { return [.red, .pink] }
-        if pct > 75 { return [.orange, .yellow] }
-        return [.orange, .yellow]
-    }
 }
 
-private struct DiskStat: View {
+private struct DiskValue: View {
     let label: String
     let value: String
 
     var body: some View {
-        VStack(spacing: 2) {
+        HStack(spacing: 4) {
             Text(label)
-                .font(.system(size: 10))
-                .foregroundColor(.secondary)
+                .font(DS.Text.micro)
+                .foregroundColor(DS.Palette.tertiary)
             Text(value)
-                .font(.system(size: 13, weight: .medium, design: .rounded))
+                .font(DS.Text.mono(10, weight: .medium))
+                .foregroundColor(DS.Palette.secondary)
                 .monospacedDigit()
         }
+        .accessibilityElement(children: .combine)
     }
 }

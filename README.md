@@ -1,46 +1,65 @@
 # MacStats
 
-A lightweight, native macOS menu bar system monitor. Real-time CPU, memory, network, disk, battery, and WiFi stats — zero dependencies, pure Swift.
+A lightweight, native macOS menu bar system monitor. Real-time CPU, memory,
+network, disk, battery and Wi-Fi stats — zero dependencies, pure Swift.
 
 ![macOS 13+](https://img.shields.io/badge/macOS-13%2B-blue)
 ![Swift 5.8](https://img.shields.io/badge/Swift-5.8-orange)
 ![License: MIT](https://img.shields.io/badge/License-MIT-green)
 
 <p align="center">
-  <img src="assets/screenshot.png" alt="MacStats Popover" width="400">
+  <img src="assets/screenshot.png" alt="MacStats popover" width="360">
+  <img src="assets/screenshot-dark.png" alt="MacStats popover in dark mode" width="360">
 </p>
+
+## What's new in 2.0
+
+- **Restyled around a single instrument surface.** Four gauges (CPU, memory,
+  disk, network) over one wide CPU trace; flat hairline panels instead of
+  shadowed cards; monochrome chrome where color only ever means state.
+- **Menu bar display styles** — full (CPU/memory/network), compact, CPU only,
+  or chart only. Right-click → *Menu Bar* to switch.
+- **Refresh rate control** — 2s / 3s / 5s / 10s, with automatic slowdown in
+  Low Power Mode and under thermal pressure.
+- **Sampling pauses entirely** while the display sleeps or the screen is locked.
+- **Sharper, cheaper status bar chart** drawn at the display's backing scale
+  from a reused bitmap context.
+- **Top-process list** with CPU/memory sorting and hover highlighting.
+- **More detail where it helps**: CPU load averages, memory pressure, disk
+  volume name, Wi-Fi link rate and band, session ↑/↓ totals.
+- **Roughly 13× cheaper sampling passes** (0.60 ms → 0.044 ms) and ~35% less
+  idle CPU — see [docs/performance.md](docs/performance.md).
 
 ## Features
 
-**Menu Bar** — Always-visible system metrics at a glance:
-- CPU usage %, Memory %, Upload/Download speeds
-- Mini CPU history bar chart with color-coded thresholds
+**Menu Bar** — always-visible metrics at a glance:
 
-**Popover Dashboard** (click the menu bar item):
-- System uptime and thermal status
-- Per-core CPU breakdown with sparkline history
-- Memory composition (active, wired, compressed, free)
-- Network I/O with live sparklines
-- Disk usage
-- WiFi signal strength and connection info
-- Battery level, health, cycle count, and temperature
-- Top 5 processes by CPU usage
+- CPU %, memory %, upload/download speeds (per display style)
+- Live CPU history chart with threshold coloring
 
-**Right-Click Menu**:
-- Open Activity Monitor
-- Copy stats summary to clipboard
+**Popover Dashboard** (left-click the menu bar item):
+
+- Overview cluster: CPU / memory / disk gauges + network speeds + CPU trace
+- Per-core CPU equalizer with load averages and busiest core
+- Memory composition (active, wired, compressed, free) with pressure state
+- Network channels with shared-scale traces and session totals
+- Wi-Fi signal, SSID, IP, channel/band and link rate
+- Disk capacity for the boot volume
+- Battery charge, time estimate, health, cycles and temperature
+- Top 5 processes, sortable by CPU or memory
+
+**Right-click Menu / Popover "…" Menu**:
+
+- Open Activity Monitor · Copy stats summary
 - Quick Actions: Sleep Display, Toggle Dark Mode, Restart Finder
-- Launch at Login toggle
+- Menu bar style · Refresh rate · Launch at Login
+
+MacStats runs as a menu-bar-only agent (`.accessory`): no Dock icon, no main
+window. That is deliberate product behavior, not a launch bug.
 
 ## Install
 
-### Download
-
-Download the latest `MacStats.dmg` from [Releases](https://github.com/macstats/MacStats/releases), open it, and drag MacStats to Applications.
-
-> Universal Binary — supports both Apple Silicon and Intel Macs.
-
-### Build from Source
+### Build and run from source
 
 Requires **Xcode Command Line Tools** and **macOS 13+** (Ventura or later).
 
@@ -48,48 +67,79 @@ Requires **Xcode Command Line Tools** and **macOS 13+** (Ventura or later).
 git clone https://github.com/macstats/MacStats.git
 cd MacStats
 
-# Build the app bundle (universal binary, ad-hoc signed)
-bash Scripts/bundle.sh
+# kill → build → launch as a real .app bundle (dist/MacStats.app)
+./script/build_and_run.sh
 
-# Launch
-open .build/release/MacStats.app
+# optional modes
+./script/build_and_run.sh --verify   # launch and confirm the process is alive
+./script/build_and_run.sh --logs     # stream unified logs
+./script/build_and_run.sh --debug    # run under lldb
 ```
 
-To keep it running permanently, drag `MacStats.app` to `/Applications` and enable **Launch at Login** from the right-click menu.
-
-### Debug Build
+### Build a distributable bundle
 
 ```bash
-bash Scripts/build.sh debug
-.build/debug/MacStats
+# universal binary (arm64 + x86_64), ad-hoc signed
+bash Scripts/bundle.sh
+open .build/release/MacStats.app
+
+# optional DMG
+bash Scripts/dmg.sh
+```
+
+To keep it running permanently, drag `MacStats.app` to `/Applications` and
+enable **Launch at Login** from the right-click menu.
+
+## Development
+
+```bash
+# fast debug build (no bundle)
+bash Scripts/build.sh debug && .build/debug/MacStats
+
+# sampling micro-benchmark, with a per-monitor breakdown
+bash Scripts/bench.sh 200
+
+# regenerate the README screenshots from the real view tree
+.build/debug/MacStats --snapshot assets/screenshot.png
+.build/debug/MacStats --snapshot assets/screenshot-dark.png dark
 ```
 
 ## Architecture
 
 ```
 Sources/MacStats/
-├── main.swift                  # Entry point
+├── main.swift                    # Entry point (app, --benchmark, --snapshot)
 ├── App/
-│   ├── AppDelegate.swift       # NSApplicationDelegate
-│   ├── LocationManager.swift   # CoreLocation authorization for WiFi SSID
-│   └── StatusBarController.swift  # Menu bar UI + popover + context menu
-├── Models/
-│   ├── SystemStats.swift       # Data structures
-│   └── TopProcess.swift        # Process info
-├── Monitors/                   # System data collection
-│   ├── SystemMonitor.swift     # Orchestrator + caching
-│   ├── CPUMonitor.swift        # Mach host_processor_info
-│   ├── MemoryMonitor.swift     # vm_statistics64
-│   ├── NetworkMonitor.swift    # getifaddrs
-│   ├── DiskMonitor.swift       # statfs
-│   ├── ProcessMonitor.swift    # proc_pidinfo (top 5)
-│   ├── BatteryMonitor.swift    # IOKit + AppleSmartBattery
-│   └── WiFiMonitor.swift       # CoreWLAN
+│   ├── AppDelegate.swift         # NSApplicationDelegate
+│   ├── AppActions.swift          # Shared desktop actions
+│   ├── StatusBarController.swift # Menu bar item, popover, context menu
+│   ├── MenuBarChartRenderer.swift# Reused bitmap chart renderer
+│   └── LocationManager.swift     # CoreLocation authorization for Wi-Fi SSID
+├── Design/
+│   ├── DesignTokens.swift        # Spacing, type scale, palette, status levels
+│   ├── Formatters.swift          # Every number the UI renders
+│   └── RingBuffer.swift          # Fixed-capacity history storage
+├── Models/                       # SystemStats, TopProcess
+├── Monitors/                     # System data collection
+│   ├── SystemMonitor.swift       # Orchestrator, cadence + backoff
+│   ├── CPUMonitor.swift          # host_processor_info + load average
+│   ├── MemoryMonitor.swift       # host_statistics64
+│   ├── NetworkMonitor.swift      # getifaddrs
+│   ├── DiskMonitor.swift         # statfs
+│   ├── ProcessMonitor.swift      # proc_pidinfo (top 5)
+│   ├── BatteryMonitor.swift      # IOKit + AppleSmartBattery
+│   └── WiFiMonitor.swift         # CoreWLAN
+├── Preferences/
+│   └── AppSettings.swift         # UserDefaults-backed preferences
+├── Support/
+│   ├── Benchmark.swift           # `--benchmark` harness
+│   └── Snapshot.swift            # Off-screen popover rendering
 ├── ViewModels/
-│   └── StatsViewModel.swift    # MVVM binding + refresh loop
-└── Views/                      # SwiftUI components
+│   └── StatsViewModel.swift      # Adaptive scheduler + section-scoped publishing
+└── Views/                        # SwiftUI panels
     ├── PopoverContentView.swift
     ├── SystemInfoHeader.swift
+    ├── OverviewPanel.swift
     ├── CPUDetailView.swift
     ├── MemoryDetailView.swift
     ├── NetworkDetailView.swift
@@ -97,24 +147,23 @@ Sources/MacStats/
     ├── BatteryDetailView.swift
     ├── WiFiDetailView.swift
     ├── ProcessListView.swift
-    └── Components/             # Reusable UI primitives
-        ├── RingView.swift
-        ├── SparklineView.swift
-        ├── SectionCardView.swift
-        ├── SegmentedBarView.swift
-        ├── StatRowView.swift
-        └── UsageBarView.swift
+    └── Components/               # Panel, Charts (Shape/Canvas primitives)
 ```
 
-### Design Decisions
+### Design decisions
 
-- **Zero external dependencies** — only Apple system frameworks (AppKit, SwiftUI, IOKit, Combine, ServiceManagement, CoreWLAN, CoreLocation)
-- **Universal Binary** — single binary runs natively on both Apple Silicon and Intel Macs
-- **MVVM pattern** — `StatsViewModel` drives both the status bar (via callback) and popover (via `@Published`)
-- **Smart caching** — disk/battery/WiFi refresh at lower frequencies than CPU/memory/network
-- **Visibility gating** — SwiftUI views only receive updates when the popover is open
-- **3-second refresh interval** — balances responsiveness with energy efficiency
-- **Fixed-width status bar** — prevents layout jitter as values change
+- **Zero external dependencies** — only Apple frameworks (AppKit, SwiftUI,
+  IOKit, Combine, ServiceManagement, CoreWLAN, CoreLocation).
+- **Universal binary** — one binary runs natively on Apple Silicon and Intel.
+- **MVVM with section-scoped publishing** — panels are `Equatable` and only
+  re-render when their own slice of state changes.
+- **Cost-tiered, change-driven sampling** — cheap syscalls every tick; disk,
+  battery and Wi-Fi on their own clocks that back off when values are stable.
+- **Suspend on sleep/lock** — nothing is sampled while the screen is off.
+- **Retina-accurate menu bar rendering** from a cached bitmap context.
+
+Design language: [docs/design-spec.md](docs/design-spec.md).
+Performance notes: [docs/performance.md](docs/performance.md).
 
 ## Requirements
 

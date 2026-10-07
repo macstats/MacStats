@@ -1,91 +1,79 @@
 import SwiftUI
 
-struct NetworkDetailView: View {
+struct NetworkDetailView: View, Equatable {
     let stats: NetworkStats
-    var upHistory: [Double] = []
-    var downHistory: [Double] = []
+    let uploadTrace: [Double]
+    let downloadTrace: [Double]
+
+    /// Both directions share one scale so the two traces stay comparable —
+    /// independently auto-scaled charts made a quiet line look busy.
+    private var scale: Double {
+        let peak = Swift.max(uploadTrace.max() ?? 0, downloadTrace.max() ?? 0)
+        let floor = 64 * 1024.0    // 64 KB/s keeps idle noise from filling the chart
+        return Swift.max(peak * 1.1, floor)
+    }
 
     var body: some View {
-        SectionCardView {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 5) {
-                    Image(systemName: "network")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(.purple)
-                    Text("Network")
-                        .font(.system(size: 13, weight: .semibold))
-                    Spacer()
+        Panel {
+            VStack(alignment: .leading, spacing: DS.Space.s) {
+                PanelHeader("Network", symbol: "network") {
+                    Text("↑ \(Format.compactBytes(stats.sessionSentBytes))  ↓ \(Format.compactBytes(stats.sessionReceivedBytes))")
+                        .font(DS.Text.mono(10))
+                        .foregroundColor(DS.Palette.tertiary)
                 }
 
-                HStack(spacing: 8) {
-                    NetCard(
-                        label: "Upload",
-                        symbol: "arrow.up",
-                        color: .teal,
-                        speed: stats.bytesSentPerSec,
-                        history: upHistory
-                    )
-                    NetCard(
-                        label: "Download",
-                        symbol: "arrow.down",
-                        color: .purple,
-                        speed: stats.bytesReceivedPerSec,
-                        history: downHistory
-                    )
-                }
+                ChannelRow(
+                    label: "Download",
+                    symbol: "arrow.down",
+                    color: DS.Palette.down,
+                    speed: stats.bytesReceivedPerSec,
+                    trace: downloadTrace,
+                    scale: scale
+                )
+
+                ChannelRow(
+                    label: "Upload",
+                    symbol: "arrow.up",
+                    color: DS.Palette.up,
+                    speed: stats.bytesSentPerSec,
+                    trace: uploadTrace,
+                    scale: scale
+                )
             }
         }
     }
 }
 
-private struct NetCard: View {
+private struct ChannelRow: View {
     let label: String
     let symbol: String
     let color: Color
     let speed: Double
-    let history: [Double]
-
-    private var maxHistory: Double {
-        max(history.max() ?? 1, 1)
-    }
+    let trace: [Double]
+    let scale: Double
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        HStack(spacing: DS.Space.s) {
             HStack(spacing: 4) {
                 Image(systemName: symbol)
-                    .font(.system(size: 9, weight: .bold))
+                    .font(.system(size: 8, weight: .bold))
                     .foregroundColor(color)
                 Text(label)
-                    .font(.system(size: 10))
-                    .foregroundColor(.secondary)
+                    .font(DS.Text.micro)
+                    .foregroundColor(DS.Palette.secondary)
             }
+            .frame(width: 66, alignment: .leading)
 
-            if history.count > 1 {
-                SparklineView(data: history, maxValue: maxHistory, color: color)
-                    .frame(height: 24)
-            }
+            TraceView(values: trace, maxValue: scale, color: color, showsFill: false, gridLines: 1)
+                .frame(height: 22)
 
-            Text(formatNetworkSpeed(speed))
-                .font(.system(size: 15, weight: .semibold, design: .rounded))
+            Text(Format.speed(speed))
+                .font(DS.Text.mono(11, weight: .medium))
+                .foregroundColor(DS.Palette.primary)
                 .monospacedDigit()
+                .frame(width: 84, alignment: .trailing)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(10)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(color.opacity(0.05))
-        )
-    }
-
-    private func formatNetworkSpeed(_ bps: Double) -> String {
-        if bps < 1024 {
-            return String(format: "%.0f B/s", bps)
-        } else if bps < 1024 * 1024 {
-            return String(format: "%.1f KB/s", bps / 1024)
-        } else if bps < 1024 * 1024 * 1024 {
-            return String(format: "%.2f MB/s", bps / (1024 * 1024))
-        } else {
-            return String(format: "%.2f GB/s", bps / (1024 * 1024 * 1024))
-        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(label) \(Format.speed(speed))")
     }
 }

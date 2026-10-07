@@ -2,12 +2,13 @@ import AppKit
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusBarController: StatusBarController?
-    private let viewModel = StatsViewModel()
+    private let settings = AppSettings()
+    private lazy var viewModel = StatsViewModel(settings: settings)
     private let locationManager = LocationManager()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         locationManager.requestAuthorization()
-        statusBarController = StatusBarController(viewModel: viewModel)
+        statusBarController = StatusBarController(viewModel: viewModel, settings: settings)
         viewModel.start()
     }
 

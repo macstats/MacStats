@@ -1,50 +1,61 @@
-import Foundation
 import Darwin
+import Foundation
 
+/// Top processes by CPU, ranking with `proc_pidinfo(PROC_PIDTASKINFO)`.
+///
+/// This is the most expensive monitor in the app (one syscall per running
+/// process), so it runs on its own slower cadence and is tuned here: the PID
+/// buffer is reused, `proc_taskinfo` stays on the stack, sample dictionaries
+/// are double-buffered instead of copied, and process names are only resolved
+/// for processes that survive the threshold filter.
 final class ProcessMonitor {
     private var previousCPUTimes: [pid_t: Double] = [:]
+    private var currentCPUTimes: [pid_t: Double] = [:]
+    private var pidBuffer: [pid_t] = []
     private var previousTimestamp: Double = 0
     private let totalMemory = Double(ProcessInfo.processInfo.physicalMemory)
+    private let coreCount = Double(ProcessInfo.processInfo.activeProcessorCount)
 
     func top(_ count: Int = 5) -> [TopProcess] {
         var bufferSize = proc_listpids(UInt32(PROC_ALL_PIDS), 0, nil, 0)
         guard bufferSize > 0 else { return [] }
 
-        var pids = [pid_t](repeating: 0, count: Int(bufferSize) / MemoryLayout<pid_t>.stride)
-        bufferSize = proc_listpids(UInt32(PROC_ALL_PIDS), 0, &pids, bufferSize)
-        let pidCount = Int(bufferSize) / MemoryLayout<pid_t>.stride
-
-        let now = ProcessInfo.processInfo.systemUptime
-        let dt = previousTimestamp > 0 ? (now - previousTimestamp) : 0
-        let coreCount = Double(ProcessInfo.processInfo.activeProcessorCount)
-
-        struct ProcEntry {
-            var pid: pid_t
-            var name: String
-            var cpuPercent: Double
-            var memPercent: Double
+        let requiredCount = Int(bufferSize) / MemoryLayout<pid_t>.stride + 32
+        if pidBuffer.count < requiredCount {
+            pidBuffer = [pid_t](repeating: 0, count: requiredCount)
         }
 
-        var currentCPUTimes: [pid_t: Double] = [:]
-        currentCPUTimes.reserveCapacity(pidCount)
-        var entries: [ProcEntry] = []
-        entries.reserveCapacity(min(pidCount, 300))
+        bufferSize = pidBuffer.withUnsafeMutableBytes { raw -> Int32 in
+            proc_listpids(UInt32(PROC_ALL_PIDS), 0, raw.baseAddress, Int32(raw.count))
+        }
+        let pidCount = Int(bufferSize) / MemoryLayout<pid_t>.stride
+        guard pidCount > 0 else { return [] }
 
-        for i in 0..<pidCount {
-            let pid = pids[i]
+        let now = ProcessInfo.processInfo.systemUptime
+        let dt = previousTimestamp > 0 ? now - previousTimestamp : 0
+
+        currentCPUTimes.removeAll(keepingCapacity: true)
+        currentCPUTimes.reserveCapacity(pidCount)
+
+        var candidates: [TopProcess] = []
+        candidates.reserveCapacity(64)
+
+        let infoSize = Int32(MemoryLayout<proc_taskinfo>.stride)
+
+        for index in 0..<pidCount {
+            let pid = pidBuffer[index]
             guard pid > 0 else { continue }
 
             var taskInfo = proc_taskinfo()
-            let infoSize = Int32(MemoryLayout<proc_taskinfo>.stride)
-            let ret = proc_pidinfo(pid, PROC_PIDTASKINFO, 0, &taskInfo, infoSize)
-            guard ret == infoSize else { continue }
+            let read = proc_pidinfo(pid, PROC_PIDTASKINFO, 0, &taskInfo, infoSize)
+            guard read == infoSize else { continue }
 
             let cpuTime = Double(taskInfo.pti_total_user + taskInfo.pti_total_system) / 1_000_000_000.0
             currentCPUTimes[pid] = cpuTime
 
             var cpuPercent = 0.0
-            if dt > 0, let prevTime = previousCPUTimes[pid] {
-                let delta = cpuTime - prevTime
+            if dt > 0, let previous = previousCPUTimes[pid] {
+                let delta = cpuTime - previous
                 if delta >= 0 {
                     cpuPercent = (delta / dt) * 100.0 / coreCount
                 }
@@ -52,28 +63,30 @@ final class ProcessMonitor {
 
             let memPercent = Double(taskInfo.pti_resident_size) / totalMemory * 100.0
 
-            // Skip idle processes early
-            guard cpuPercent > 0.01 || memPercent > 0.1 else { continue }
+            // Cheap rejects happen before any name resolution.
+            guard cpuPercent > 0.05 || memPercent > 0.2 else { continue }
 
-            var nameBuffer = [CChar](repeating: 0, count: 256)
-            let nameLen = proc_name(pid, &nameBuffer, UInt32(nameBuffer.count))
-            let name: String
-            if nameLen > 0 {
-                name = String(cString: nameBuffer)
-            } else {
-                continue
-            }
+            var nameBuffer = [CChar](repeating: 0, count: 128)
+            let nameLength = proc_name(pid, &nameBuffer, UInt32(nameBuffer.count))
+            guard nameLength > 0 else { continue }
 
-            entries.append(ProcEntry(pid: pid, name: name, cpuPercent: cpuPercent, memPercent: memPercent))
+            candidates.append(
+                TopProcess(
+                    pid: pid,
+                    name: String(cString: nameBuffer),
+                    cpuPercent: cpuPercent,
+                    memPercent: memPercent
+                )
+            )
         }
 
-        previousCPUTimes = currentCPUTimes
+        swap(&previousCPUTimes, &currentCPUTimes)
         previousTimestamp = now
 
-        entries.sort { $0.cpuPercent > $1.cpuPercent }
-
-        return entries.prefix(count).map {
-            TopProcess(pid: $0.pid, name: $0.name, cpuPercent: $0.cpuPercent, memPercent: $0.memPercent)
+        candidates.sort { lhs, rhs in
+            lhs.cpuPercent == rhs.cpuPercent ? lhs.memPercent > rhs.memPercent : lhs.cpuPercent > rhs.cpuPercent
         }
+
+        return Array(candidates.prefix(count))
     }
 }

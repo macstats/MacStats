@@ -1,92 +1,56 @@
+import Foundation
 import SwiftUI
 
-struct SystemInfoHeader: View {
+/// Top-of-popover identity line: which Mac this is, what it runs, and how
+/// hard it is working. Kept to one compact row so real data starts immediately.
+struct SystemInfoHeader: View, Equatable {
     let uptime: TimeInterval
-    var thermalLevel: ThermalLevel = .nominal
+    let thermalLevel: ThermalLevel
+    let lastUpdated: Date
 
-    private var macName: String {
-        Host.current().localizedName ?? "Mac"
-    }
+    /// Resolved once: `Host.current()` can hit the resolver, and this view is
+    /// re-evaluated on every sample while the popover is open.
+    private static let cachedMacName = Host.current().localizedName ?? "Mac"
 
-    private var osVersion: String {
-        let v = ProcessInfo.processInfo.operatingSystemVersion
-        return "macOS \(v.majorVersion).\(v.minorVersion).\(v.patchVersion)"
-    }
+    private static let cachedOSVersion: String = {
+        let version = ProcessInfo.processInfo.operatingSystemVersion
+        return "macOS \(version.majorVersion).\(version.minorVersion).\(version.patchVersion)"
+    }()
 
-    private var uptimeText: String {
-        let total = Int(uptime)
-        let days = total / 86400
-        let hours = (total % 86400) / 3600
-        let mins = (total % 3600) / 60
+    private var macName: String { Self.cachedMacName }
 
-        if days > 0 {
-            return "\(days)d \(hours)h \(mins)m"
-        } else if hours > 0 {
-            return "\(hours)h \(mins)m"
-        } else {
-            return "\(mins)m"
-        }
-    }
+    private var osVersion: String { Self.cachedOSVersion }
 
     var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "laptopcomputer")
-                .font(.system(size: 22))
-                .foregroundColor(.cyan)
-
+        HStack(alignment: .center, spacing: DS.Space.s) {
             VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(macName)
-                        .font(.system(size: 13, weight: .semibold))
-                        .lineLimit(1)
-                    if thermalLevel != .nominal {
-                        ThermalBadge(level: thermalLevel)
-                    }
-                }
-                Text("\(osVersion)  ·  up \(uptimeText)")
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundColor(.secondary)
+                Text(macName)
+                    .font(DS.Text.title)
+                    .foregroundColor(DS.Palette.primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
+                Text("\(osVersion)  ·  up \(Format.uptime(uptime))")
+                    .font(DS.Text.mono(10))
+                    .foregroundColor(DS.Palette.secondary)
             }
 
-            Spacer()
-        }
-        .padding(.vertical, 4)
-    }
-}
+            Spacer(minLength: DS.Space.s)
 
-private struct ThermalBadge: View {
-    let level: ThermalLevel
-
-    private var color: Color {
-        switch level {
-        case .nominal:  return .green
-        case .fair:     return .yellow
-        case .serious:  return .orange
-        case .critical: return .red
+            VStack(alignment: .trailing, spacing: 3) {
+                if thermalLevel != .nominal {
+                    StatusChip(
+                        text: thermalLevel.label,
+                        symbol: thermalLevel.symbol,
+                        level: thermalLevel.level
+                    )
+                }
+                Text("updated \(Format.age(since: lastUpdated))")
+                    .font(DS.Text.micro)
+                    .foregroundColor(DS.Palette.tertiary)
+            }
         }
-    }
-
-    private var icon: String {
-        switch level {
-        case .nominal:  return "thermometer.low"
-        case .fair:     return "thermometer.medium"
-        case .serious:  return "thermometer.high"
-        case .critical: return "flame.fill"
-        }
-    }
-
-    var body: some View {
-        HStack(spacing: 2) {
-            Image(systemName: icon)
-                .font(.system(size: 8, weight: .bold))
-            Text(level.label)
-                .font(.system(size: 9, weight: .semibold))
-        }
-        .foregroundColor(color)
-        .padding(.horizontal, 5)
-        .padding(.vertical, 2)
-        .background(
-            Capsule().fill(color.opacity(0.15))
-        )
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(macName), \(osVersion), uptime \(Format.uptime(uptime))")
     }
 }

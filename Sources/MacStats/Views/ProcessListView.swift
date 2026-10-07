@@ -1,42 +1,70 @@
 import SwiftUI
 
-struct ProcessListView: View {
+struct ProcessListView: View, Equatable {
     let processes: [TopProcess]
+    @Binding var sort: ProcessSortKey
+
+    static func == (lhs: ProcessListView, rhs: ProcessListView) -> Bool {
+        lhs.processes == rhs.processes && lhs.sort == rhs.sort
+    }
+
+    private var ranked: [TopProcess] {
+        processes.sorted { lhs, rhs in
+            switch sort {
+            case .cpu:
+                return lhs.cpuPercent == rhs.cpuPercent
+                    ? lhs.memPercent > rhs.memPercent
+                    : lhs.cpuPercent > rhs.cpuPercent
+            case .memory:
+                return lhs.memPercent == rhs.memPercent
+                    ? lhs.cpuPercent > rhs.cpuPercent
+                    : lhs.memPercent > rhs.memPercent
+            }
+        }
+    }
 
     var body: some View {
-        SectionCardView {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 5) {
-                    Image(systemName: "list.number")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(.cyan)
-                    Text("Top Processes")
-                        .font(.system(size: 13, weight: .semibold))
-                    Spacer()
-                    Text("CPU")
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundColor(.secondary)
-                        .frame(width: 42, alignment: .trailing)
-                    Text("MEM")
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundColor(.secondary)
-                        .frame(width: 42, alignment: .trailing)
+        Panel {
+            VStack(alignment: .leading, spacing: DS.Space.s) {
+                PanelHeader("Top Processes", symbol: "list.number") {
+                    Picker("Sort", selection: $sort) {
+                        ForEach(ProcessSortKey.allCases, id: \.self) { key in
+                            Text(key.label).tag(key)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .controlSize(.mini)
+                    .labelsHidden()
+                    .frame(width: 108)
+                    .accessibilityLabel("Sort processes")
                 }
 
+                HStack(spacing: 6) {
+                    Text("PROCESS")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Text("CPU")
+                        .frame(width: 46, alignment: .trailing)
+                    Text("MEM")
+                        .frame(width: 42, alignment: .trailing)
+                }
+                .font(DS.Text.micro)
+                .foregroundColor(DS.Palette.tertiary)
+
                 if processes.isEmpty {
-                    HStack {
-                        Spacer()
+                    HStack(spacing: DS.Space.s) {
                         ProgressView()
                             .controlSize(.small)
-                        Text("Loading...")
-                            .font(.system(size: 11))
-                            .foregroundColor(.secondary)
-                        Spacer()
+                        Text("Sampling…")
+                            .font(DS.Text.body)
+                            .foregroundColor(DS.Palette.secondary)
                     }
-                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, DS.Space.s)
                 } else {
-                    ForEach(Array(processes.enumerated()), id: \.offset) { index, proc in
-                        ProcessRow(rank: index + 1, process: proc)
+                    VStack(spacing: 1) {
+                        ForEach(Array(ranked.enumerated()), id: \.element.id) { index, process in
+                            ProcessRow(rank: index + 1, process: process, sort: sort)
+                        }
                     }
                 }
             }
@@ -47,67 +75,42 @@ struct ProcessListView: View {
 private struct ProcessRow: View {
     let rank: Int
     let process: TopProcess
+    let sort: ProcessSortKey
+
+    private var cpuLevel: StatusLevel { StatusLevel.usage(process.cpuPercent / 100, elevated: 0.5, critical: 0.8) }
 
     var body: some View {
         HStack(spacing: 6) {
-            // Rank badge
             Text("\(rank)")
-                .font(.system(size: 9, weight: .bold, design: .rounded))
-                .foregroundColor(.white)
-                .frame(width: 16, height: 16)
-                .background(
-                    Circle().fill(rankColor)
-                )
+                .font(DS.Text.mono(9))
+                .foregroundColor(DS.Palette.tertiary)
+                .frame(width: 12, alignment: .leading)
 
-            // Process name
             Text(process.name)
-                .font(.system(size: 11, weight: .medium))
+                .font(.system(size: 11, weight: sort == .cpu || sort == .memory ? .medium : .regular))
+                .foregroundColor(DS.Palette.primary)
                 .lineLimit(1)
                 .truncationMode(.middle)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-            Spacer()
-
-            // CPU bar + value
-            MiniBar(value: process.cpuPercent, max: 100, color: .blue)
-                .frame(width: 20, height: 10)
             Text(String(format: "%.1f%%", process.cpuPercent))
-                .font(.system(size: 10, design: .monospaced))
-                .foregroundColor(process.cpuPercent > 50 ? .orange : .secondary)
-                .frame(width: 42, alignment: .trailing)
+                .font(DS.Text.mono(10))
+                .foregroundColor(cpuLevel == .normal ? DS.Palette.secondary : cpuLevel.color)
+                .monospacedDigit()
+                .frame(width: 46, alignment: .trailing)
 
-            // MEM value
             Text(String(format: "%.1f%%", process.memPercent))
-                .font(.system(size: 10, design: .monospaced))
-                .foregroundColor(.secondary)
+                .font(DS.Text.mono(10))
+                .foregroundColor(DS.Palette.secondary)
+                .monospacedDigit()
                 .frame(width: 42, alignment: .trailing)
         }
-        .padding(.vertical, 1)
-    }
-
-    private var rankColor: Color {
-        switch rank {
-        case 1: return .red
-        case 2: return .orange
-        case 3: return .yellow
-        default: return .gray
-        }
-    }
-}
-
-private struct MiniBar: View {
-    let value: Double
-    let max: Double
-    let color: Color
-
-    var body: some View {
-        GeometryReader { geo in
-            ZStack(alignment: .leading) {
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(.quaternary)
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(color)
-                    .frame(width: geo.size.width * min(value / max, 1))
-            }
-        }
+        .frame(height: DS.Layout.rowHeight)
+        .modifier(HoverHighlight())
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            "\(process.name), CPU \(String(format: "%.1f", process.cpuPercent)) percent, "
+                + "memory \(String(format: "%.1f", process.memPercent)) percent"
+        )
     }
 }

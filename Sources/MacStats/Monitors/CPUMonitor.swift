@@ -1,9 +1,16 @@
-import Foundation
 import Darwin.Mach
+import Foundation
 
+/// Reads per-core CPU load from Mach `host_processor_info`.
+///
+/// Hot-path notes: the tick buffer and the emitted per-core array are
+/// allocated once and reused, so a steady-state read performs no heap
+/// allocations and exactly one Mach call.
 final class CPUMonitor {
-    private var previousTicks: [(user: UInt32, system: UInt32, idle: UInt32, nice: UInt32)] = []
     private let hostPort: host_t = mach_host_self()
+    private var previousTicks: [UInt32] = []
+    private var perCoreUsage: [Double] = []
+    private var hasBaseline = false
 
     func read() -> CPUStats {
         var processorCount: natural_t = 0
@@ -21,65 +28,67 @@ final class CPUMonitor {
         guard result == KERN_SUCCESS, let info = processorInfo else {
             return CPUStats()
         }
-
         defer {
-            let size = vm_size_t(
-                MemoryLayout<integer_t>.stride * Int(processorInfoCount)
+            vm_deallocate(
+                mach_task_self_,
+                vm_address_t(bitPattern: info),
+                vm_size_t(MemoryLayout<integer_t>.stride * Int(processorInfoCount))
             )
-            vm_deallocate(mach_task_self_, vm_address_t(bitPattern: info), size)
         }
 
         let coreCount = Int(processorCount)
-        var currentTicks: [(user: UInt32, system: UInt32, idle: UInt32, nice: UInt32)] = []
-        currentTicks.reserveCapacity(coreCount)
-        var perCoreUsage: [Double] = []
-        perCoreUsage.reserveCapacity(coreCount)
-        var totalUserDelta: UInt64 = 0
-        var totalSystemDelta: UInt64 = 0
-        var totalIdleDelta: UInt64 = 0
+        let stride = Int(CPU_STATE_MAX)
 
-        for i in 0..<coreCount {
-            let offset = Int(CPU_STATE_MAX) * i
-            let user = UInt32(bitPattern: info[offset + Int(CPU_STATE_USER)])
-            let system = UInt32(bitPattern: info[offset + Int(CPU_STATE_SYSTEM)])
-            let idle = UInt32(bitPattern: info[offset + Int(CPU_STATE_IDLE)])
-            let nice = UInt32(bitPattern: info[offset + Int(CPU_STATE_NICE)])
+        if previousTicks.count != coreCount * stride {
+            previousTicks = [UInt32](repeating: 0, count: coreCount * stride)
+            hasBaseline = false
+        }
+        if perCoreUsage.count != coreCount {
+            perCoreUsage = [Double](repeating: 0, count: coreCount)
+        }
 
-            currentTicks.append((user: user, system: system, idle: idle, nice: nice))
+        var totalBusy: UInt64 = 0
+        var totalTicks: UInt64 = 0
 
-            if i < previousTicks.count {
-                let prev = previousTicks[i]
-                let userDelta = UInt64(user &- prev.user)
-                let systemDelta = UInt64(system &- prev.system)
-                let idleDelta = UInt64(idle &- prev.idle)
-                let niceDelta = UInt64(nice &- prev.nice)
-                let total = userDelta + systemDelta + idleDelta + niceDelta
+        for core in 0..<coreCount {
+            let base = core * stride
+            let user = UInt32(bitPattern: info[base + Int(CPU_STATE_USER)])
+            let system = UInt32(bitPattern: info[base + Int(CPU_STATE_SYSTEM)])
+            let idle = UInt32(bitPattern: info[base + Int(CPU_STATE_IDLE)])
+            let nice = UInt32(bitPattern: info[base + Int(CPU_STATE_NICE)])
 
-                if total > 0 {
-                    let usage = Double(userDelta + systemDelta + niceDelta) / Double(total) * 100.0
-                    perCoreUsage.append(usage)
-                } else {
-                    perCoreUsage.append(0)
-                }
+            if hasBaseline {
+                let userDelta = UInt64(user &- previousTicks[base + Int(CPU_STATE_USER)])
+                let systemDelta = UInt64(system &- previousTicks[base + Int(CPU_STATE_SYSTEM)])
+                let idleDelta = UInt64(idle &- previousTicks[base + Int(CPU_STATE_IDLE)])
+                let niceDelta = UInt64(nice &- previousTicks[base + Int(CPU_STATE_NICE)])
+                let busy = userDelta &+ systemDelta &+ niceDelta
+                let all = busy &+ idleDelta
 
-                totalUserDelta += userDelta + niceDelta
-                totalSystemDelta += systemDelta
-                totalIdleDelta += idleDelta
-            } else {
-                perCoreUsage.append(0)
+                perCoreUsage[core] = all > 0 ? Double(busy) / Double(all) * 100.0 : 0
+                totalBusy &+= busy
+                totalTicks &+= all
             }
+
+            previousTicks[base + Int(CPU_STATE_USER)] = user
+            previousTicks[base + Int(CPU_STATE_SYSTEM)] = system
+            previousTicks[base + Int(CPU_STATE_IDLE)] = idle
+            previousTicks[base + Int(CPU_STATE_NICE)] = nice
         }
 
-        previousTicks = currentTicks
+        hasBaseline = true
 
-        let grandTotal = totalUserDelta + totalSystemDelta + totalIdleDelta
-        let totalUsage: Double
-        if grandTotal > 0 {
-            totalUsage = Double(totalUserDelta + totalSystemDelta) / Double(grandTotal) * 100.0
-        } else {
-            totalUsage = 0
-        }
+        return CPUStats(
+            totalUsage: totalTicks > 0 ? Double(totalBusy) / Double(totalTicks) * 100.0 : 0,
+            perCoreUsage: perCoreUsage,
+            load: Self.loadAverage()
+        )
+    }
 
-        return CPUStats(totalUsage: totalUsage, perCoreUsage: perCoreUsage)
+    /// `getloadavg` is a single cheap syscall; no polling source needed.
+    private static func loadAverage() -> LoadAverage {
+        var loads = [Double](repeating: 0, count: 3)
+        guard getloadavg(&loads, 3) == 3 else { return LoadAverage() }
+        return LoadAverage(one: loads[0], five: loads[1], fifteen: loads[2])
     }
 }

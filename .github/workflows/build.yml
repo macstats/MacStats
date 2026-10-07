@@ -6,9 +6,15 @@ on:
   pull_request:
     branches: [main]
 
+# A newer run for the same branch/PR cancels the run it supersedes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: macos-14
+    timeout-minutes: 30
     strategy:
       matrix:
         build-type: [debug, release]
@@ -16,8 +22,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The unit tests are written against Swift Testing, which needs a Swift 6
+      # toolchain; Xcode 16.2 is the newest Swift 6 Xcode on the macos-14 image.
       - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_15.4.app
+        run: sudo xcode-select -s /Applications/Xcode_16.2.app
+
+      - name: Show build environment
+        run: |
+          xcodebuild -version
+          swift --version
+
+      # `.build/out` is where SwiftPM keeps the compiled targets, module cache
+      # and SDK caches used by `swift test`; the key follows the sources so a
+      # restored cache always matches the revision being built.
+      - name: Cache SwiftPM build
+        uses: actions/cache@v4
+        with:
+          path: .build/out
+          key: "${{ runner.os }}-${{ runner.arch }}-spm-xcode16.2-${{ hashFiles('Package.swift', 'Sources/**/*.swift', 'Tests/**/*.swift') }}"
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-spm-xcode16.2-
+
+      - name: Test (swift test)
+        run: swift test
 
       - name: Build (${{ matrix.build-type }})
         run: bash Scripts/build.sh ${{ matrix.build-type }}
@@ -25,6 +52,26 @@ jobs:
       - name: Bundle app
         if: matrix.build-type == 'release'
         run: bash Scripts/bundle.sh
+
+      - name: Verify app bundle
+        if: matrix.build-type == 'release'
+        run: |
+          APP=".build/release/MacStats.app"
+          BIN="$APP/Contents/MacOS/MacStats"
+          test -d "$APP"
+          test -x "$BIN"
+
+          echo "== file =="
+          file "$BIN"
+          file "$BIN" | grep -q 'Mach-O 64-bit executable'
+
+          echo "== lipo =="
+          lipo -info "$BIN"
+          lipo -info "$BIN" | grep -q 'arm64'
+          lipo -info "$BIN" | grep -q 'x86_64'
+
+          echo "== codesign =="
+          codesign -vv "$APP"
 
       - name: Upload app bundle
         if: matrix.build-type == 'release'

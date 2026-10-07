@@ -1,98 +1,64 @@
 import SwiftUI
 
-struct MemoryDetailView: View {
+struct MemoryDetailView: View, Equatable {
     let stats: MemoryStats
 
+    private var status: StatusLevel {
+        let usage = StatusLevel.usage(stats.usagePercent / 100)
+        return Swift.max(usage, stats.pressure.level)
+    }
+
+    private var valueColor: Color {
+        status == .normal ? DS.Palette.primary : status.color
+    }
+
     var body: some View {
-        SectionCardView {
-            VStack(alignment: .leading, spacing: 12) {
-                // Top row: ring + info
-                HStack(spacing: 14) {
-                    ZStack {
-                        RingView(
-                            progress: stats.usagePercent / 100.0,
-                            lineWidth: 5,
-                            colors: memGradient(stats.usagePercent)
+        Panel {
+            VStack(alignment: .leading, spacing: DS.Space.m) {
+                PanelHeader("Memory", symbol: "memorychip") {
+                    if stats.pressure != .normal {
+                        StatusChip(
+                            text: "\(stats.pressure.label) pressure",
+                            symbol: "exclamationmark.triangle.fill",
+                            level: stats.pressure.level
                         )
-                        Text(String(format: "%.0f", stats.usagePercent))
-                            .font(.system(size: 14, weight: .bold, design: .rounded))
-                            .monospacedDigit()
+                    } else {
+                        Text(Format.bytes(stats.totalBytes))
+                            .font(DS.Text.label)
+                            .foregroundColor(DS.Palette.secondary)
                     }
-                    .frame(width: 48, height: 48)
-
-                    VStack(alignment: .leading, spacing: 3) {
-                        HStack(spacing: 5) {
-                            Image(systemName: "memorychip")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundColor(.green)
-                            Text("Memory")
-                                .font(.system(size: 13, weight: .semibold))
-                        }
-                        Text("\(formatBytes(stats.usedBytes)) / \(formatBytes(stats.totalBytes))")
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundColor(.secondary)
-                    }
-
-                    Spacer()
-
-                    Text(String(format: "%.1f%%", stats.usagePercent))
-                        .font(.system(size: 20, weight: .medium, design: .rounded))
-                        .monospacedDigit()
                 }
 
-                // Segmented bar
-                SegmentedBarView(
+                HStack(alignment: .firstTextBaseline, spacing: DS.Space.s) {
+                    Text(Format.percent(stats.usagePercent, decimals: 1))
+                        .font(DS.Text.metric)
+                        .foregroundColor(valueColor)
+                        .monospacedDigit()
+
+                    Spacer(minLength: DS.Space.s)
+
+                    Text("\(Format.bytes(stats.usedBytes)) of \(Format.bytes(stats.totalBytes))")
+                        .font(DS.Text.label)
+                        .foregroundColor(DS.Palette.secondary)
+                }
+
+                SegmentedBar(
                     segments: [
-                        (value: Double(stats.activeBytes), color: .green, label: "Active"),
-                        (value: Double(stats.wiredBytes), color: .yellow, label: "Wired"),
-                        (value: Double(stats.compressedBytes), color: .orange, label: "Compressed"),
+                        .init(value: Double(stats.activeBytes), color: DS.Palette.memory, label: "Active"),
+                        .init(value: Double(stats.wiredBytes), color: DS.Palette.memory.opacity(0.72), label: "Wired"),
+                        .init(value: Double(stats.compressedBytes), color: DS.Palette.memory.opacity(0.45), label: "Compressed"),
+                        .init(value: Double(stats.freeBytes), color: DS.Palette.track, label: "Free"),
                     ],
-                    total: Double(stats.totalBytes),
-                    height: 6
+                    total: Double(stats.totalBytes)
                 )
 
-                // Legend + details
-                HStack(spacing: 0) {
-                    MemBlock(color: .green, label: "Active", value: formatBytes(stats.activeBytes))
-                    MemBlock(color: .yellow, label: "Wired", value: formatBytes(stats.wiredBytes))
-                    MemBlock(color: .orange, label: "Compr.", value: formatBytes(stats.compressedBytes))
-                    MemBlock(color: Color(nsColor: .separatorColor), label: "Free", value: formatBytes(stats.freeBytes))
+                HStack(spacing: DS.Space.s) {
+                    LegendDot(color: DS.Palette.memory, label: "Active", value: Format.compactBytes(stats.activeBytes))
+                    LegendDot(color: DS.Palette.memory.opacity(0.72), label: "Wired", value: Format.compactBytes(stats.wiredBytes))
+                    LegendDot(color: DS.Palette.memory.opacity(0.45), label: "Compr.", value: Format.compactBytes(stats.compressedBytes))
+                    LegendDot(color: DS.Palette.track, label: "Free", value: Format.compactBytes(stats.freeBytes))
                 }
             }
         }
     }
-
-    private func memGradient(_ pct: Double) -> [Color] {
-        if pct > 85 { return [.red, .orange] }
-        if pct > 65 { return [.yellow, .green] }
-        return [.mint, .green]
-    }
-}
-
-private struct MemBlock: View {
-    let color: Color
-    let label: String
-    let value: String
-
-    var body: some View {
-        VStack(spacing: 3) {
-            HStack(spacing: 3) {
-                Circle().fill(color).frame(width: 5, height: 5)
-                Text(label)
-                    .font(.system(size: 9))
-                    .foregroundColor(.secondary)
-            }
-            Text(value)
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
-                .monospacedDigit()
-        }
-        .frame(maxWidth: .infinity)
-    }
-}
-
-func formatBytes(_ bytes: UInt64) -> String {
-    let gb = Double(bytes) / (1024 * 1024 * 1024)
-    if gb >= 1.0 { return String(format: "%.1fG", gb) }
-    let mb = Double(bytes) / (1024 * 1024)
-    return String(format: "%.0fM", mb)
 }
