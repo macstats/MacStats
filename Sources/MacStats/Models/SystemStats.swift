@@ -23,17 +23,73 @@ struct MemoryStats {
 struct NetworkStats {
     var bytesSentPerSec: Double = 0
     var bytesReceivedPerSec: Double = 0
+    /// Totals accumulated since MacStats launched (not since boot).
+    var sessionSentBytes: UInt64 = 0
+    var sessionReceivedBytes: UInt64 = 0
+    /// Highest rates observed since launch.
+    var peakSentPerSec: Double = 0
+    var peakReceivedPerSec: Double = 0
 }
 
 struct DiskStats {
     var totalBytes: UInt64 = 0
     var freeBytes: UInt64 = 0
-    var usedBytes: UInt64 { totalBytes - freeBytes }
+    /// Live throughput derived from IOBlockStorageDriver statistics.
+    var readBytesPerSec: Double = 0
+    var writeBytesPerSec: Double = 0
+    /// Totals accumulated since MacStats launched.
+    var sessionReadBytes: UInt64 = 0
+    var sessionWriteBytes: UInt64 = 0
+    var usedBytes: UInt64 { totalBytes > freeBytes ? totalBytes - freeBytes : 0 }
 
     var usagePercent: Double {
         guard totalBytes > 0 else { return 0 }
         return Double(usedBytes) / Double(totalBytes) * 100.0
     }
+}
+
+struct GPUStats {
+    var isAvailable: Bool = false
+    var name: String = ""
+    var utilizationPercent: Double = 0
+    var memoryUsedBytes: UInt64 = 0
+    var memoryTotalBytes: UInt64 = 0
+    var coreCount: Int = 0
+
+    var memoryUsagePercent: Double {
+        guard memoryTotalBytes > 0 else { return 0 }
+        return Double(memoryUsedBytes) / Double(memoryTotalBytes) * 100.0
+    }
+}
+
+struct FanStats: Identifiable {
+    var index: Int = 0
+    var rpm: Int = 0
+    var minRPM: Int = 0
+    var maxRPM: Int = 0
+
+    var id: Int { index }
+}
+
+struct SensorStats {
+    var isAvailable: Bool = false
+    /// CPU (or proximity) temperature in Celsius, nil when unavailable.
+    var cpuTemperature: Double? = nil
+    /// SMC key that produced `cpuTemperature` — handy for debugging.
+    var temperatureKey: String = ""
+    var fans: [FanStats] = []
+}
+
+struct ConnectionStats {
+    var isAvailable: Bool = false
+    var established: Int = 0
+    var listening: Int = 0
+    var timeWait: Int = 0
+    var closeWait: Int = 0
+    var other: Int = 0
+    var listeningPorts: [Int] = []
+
+    var total: Int { established + listening + timeWait + closeWait + other }
 }
 
 struct BatteryStats {
@@ -97,5 +153,8 @@ struct SystemStats {
     var disk = DiskStats()
     var battery = BatteryStats()
     var wifi = WiFiStats()
+    var gpu = GPUStats()
+    var sensors = SensorStats()
+    var connections = ConnectionStats()
     var thermalLevel = ThermalLevel.nominal
 }

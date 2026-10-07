@@ -4,6 +4,7 @@ struct NetworkDetailView: View {
     let stats: NetworkStats
     var upHistory: [Double] = []
     var downHistory: [Double] = []
+    var connections: ConnectionStats = ConnectionStats()
 
     var body: some View {
         SectionCardView {
@@ -33,7 +34,38 @@ struct NetworkDetailView: View {
                         history: downHistory
                     )
                 }
+
+                // Baseline connection summary — the connection feature agent owns the final layout.
+                if connections.isAvailable {
+                    Divider()
+                    HStack(spacing: 10) {
+                        NetChip(label: "Established", value: connections.established, color: .green)
+                        NetChip(label: "Listening", value: connections.listening, color: .blue)
+                        NetChip(label: "Time Wait", value: connections.timeWait, color: .orange)
+                        Spacer()
+                    }
+                }
             }
+        }
+    }
+}
+
+private struct NetChip: View {
+    let label: String
+    let value: Int
+    let color: Color
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(color)
+                .frame(width: 5, height: 5)
+            Text("\(value)")
+                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+            Text(label)
+                .font(.system(size: 9))
+                .foregroundColor(.secondary)
         }
     }
 }

@@ -11,6 +11,7 @@ SDK=$(xcrun --show-sdk-path 2>/dev/null)
 SOURCES=(
     Sources/MacStats/Models/SystemStats.swift
     Sources/MacStats/Models/TopProcess.swift
+    Sources/MacStats/Models/MetricSample.swift
     Sources/MacStats/Monitors/CPUMonitor.swift
     Sources/MacStats/Monitors/MemoryMonitor.swift
     Sources/MacStats/Monitors/NetworkMonitor.swift
@@ -18,6 +19,9 @@ SOURCES=(
     Sources/MacStats/Monitors/ProcessMonitor.swift
     Sources/MacStats/Monitors/BatteryMonitor.swift
     Sources/MacStats/Monitors/WiFiMonitor.swift
+    Sources/MacStats/Monitors/GPUMonitor.swift
+    Sources/MacStats/Monitors/SensorMonitor.swift
+    Sources/MacStats/Monitors/ConnectionMonitor.swift
     Sources/MacStats/Monitors/SystemMonitor.swift
     Sources/MacStats/ViewModels/StatsViewModel.swift
     Sources/MacStats/Views/Components/UsageBarView.swift
@@ -34,9 +38,15 @@ SOURCES=(
     Sources/MacStats/Views/WiFiDetailView.swift
     Sources/MacStats/Views/ProcessListView.swift
     Sources/MacStats/Views/SystemInfoHeader.swift
+    Sources/MacStats/Views/GPUDetailView.swift
+    Sources/MacStats/Views/SensorDetailView.swift
+    Sources/MacStats/Views/AlertBannerView.swift
     Sources/MacStats/Views/PopoverContentView.swift
     Sources/MacStats/App/AppDelegate.swift
     Sources/MacStats/App/LocationManager.swift
+    Sources/MacStats/App/AlertCenter.swift
+    Sources/MacStats/App/MetricsExporter.swift
+    Sources/MacStats/App/DumpOnce.swift
     Sources/MacStats/App/StatusBarController.swift
     Sources/MacStats/main.swift
 )
@@ -49,6 +59,7 @@ FRAMEWORKS=(
     -framework ServiceManagement
     -framework CoreWLAN
     -framework CoreLocation
+    -framework UserNotifications
 )
 
 build_debug() {

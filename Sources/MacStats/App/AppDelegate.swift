@@ -7,6 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         locationManager.requestAuthorization()
+        viewModel.requestNotificationAuthorization()
         statusBarController = StatusBarController(viewModel: viewModel)
         viewModel.start()
     }

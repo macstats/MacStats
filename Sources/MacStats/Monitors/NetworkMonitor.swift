@@ -5,6 +5,11 @@ final class NetworkMonitor {
     private var previousBytesSent: UInt64 = 0
     private var previousBytesReceived: UInt64 = 0
     private var previousTimestamp: TimeInterval = 0
+    private var baselineSent: UInt64 = 0
+    private var baselineReceived: UInt64 = 0
+    private var isPrimed = false
+    private var peakSentPerSec: Double = 0
+    private var peakReceivedPerSec: Double = 0
 
     func read() -> NetworkStats {
         var totalSent: UInt64 = 0
@@ -54,6 +59,23 @@ final class NetworkMonitor {
         previousBytesReceived = totalReceived
         previousTimestamp = now
 
-        return NetworkStats(bytesSentPerSec: sentPerSec, bytesReceivedPerSec: receivedPerSec)
+        if !isPrimed {
+            // First sample only establishes the session baseline — no rate yet.
+            baselineSent = totalSent
+            baselineReceived = totalReceived
+            isPrimed = true
+        }
+
+        peakSentPerSec = max(peakSentPerSec, sentPerSec)
+        peakReceivedPerSec = max(peakReceivedPerSec, receivedPerSec)
+
+        return NetworkStats(
+            bytesSentPerSec: sentPerSec,
+            bytesReceivedPerSec: receivedPerSec,
+            sessionSentBytes: totalSent >= baselineSent ? totalSent - baselineSent : 0,
+            sessionReceivedBytes: totalReceived >= baselineReceived ? totalReceived - baselineReceived : 0,
+            peakSentPerSec: peakSentPerSec,
+            peakReceivedPerSec: peakReceivedPerSec
+        )
     }
 }
